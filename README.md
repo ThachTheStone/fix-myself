@@ -2,6 +2,12 @@
 
 A local-first planner and focus timer for Windows 11 and Android. The first working slice lets you set a mission, capture and prioritize tasks, and bring your next action into view when a focus session blocks a site in Chrome. See the [software requirements](SRS.md) for the full product scope.
 
+## Project context
+
+- [Agent guide](AGENTS.md)
+- [Current architecture and proposed stack](docs/ARCHITECTURE.md)
+- [Development and handoff workflow](docs/WORKFLOW.md)
+
 ## Run the planner
 
 Use Node.js 22.12 or later in the Node 22 series, or Node 24.
