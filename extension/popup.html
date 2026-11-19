@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fix Myself Focus</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body class="popup">
+  <h1>Fix Myself Focus</h1>
+  <p id="status" role="status">Checking the desktop connection…</p>
+  <form id="pair-form" hidden>
+    <label for="token">Desktop pairing code</label>
+    <input id="token" type="password" minlength="64" maxlength="64" required autocomplete="off">
+    <button type="submit">Pair Chrome</button>
+  </form>
+  <button type="button" class="secondary" id="refresh">Check connection</button>
+  <p id="feedback" role="alert"></p>
+</body>
+</html>

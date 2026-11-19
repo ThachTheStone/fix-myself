@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f6f5ef">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Fix Myself</title>
+  <link rel="stylesheet" href="/app/styles.css">
+  <script type="module" src="/app/main.js"></script>
+</head>
+<body>
+  <header class="shell topbar">
+    <a class="brand" href="#today" aria-label="Fix Myself home"><span class="brand-mark" aria-hidden="true">◒</span> Fix Myself</a>
+    <nav aria-label="Main navigation">
+      <a href="#today" class="nav-link">Today</a>
+      <a href="#tasks" class="nav-link">Tasks</a>
+      <a href="#settings" class="nav-link">Settings</a>
+    </nav>
+  </header>
+
+  <main class="shell" id="main">
+    <section id="today" class="view" aria-labelledby="today-title">
+      <div class="page-title">
+        <p class="eyebrow" id="today-date"></p>
+        <h1 id="today-title">Today</h1>
+      </div>
+      <div class="overview">
+        <section class="mission panel" aria-labelledby="mission-label">
+          <h2 class="eyebrow" id="mission-label">Your mission</h2>
+          <p id="mission-summary"></p>
+          <button type="button" class="text-button" id="edit-mission">Edit mission</button>
+        </section>
+        <section class="focus panel" aria-labelledby="focus-label">
+          <div class="focus-heading"><h2 class="eyebrow" id="focus-label">Focus session</h2><span class="focus-dot" aria-hidden="true"></span></div>
+          <p class="focus-time" id="focus-time"></p>
+          <button type="button" class="button focus-button" id="start-focus">Start focus</button>
+          <p id="focus-status" class="focus-status" role="status"></p>
+        </section>
+      </div>
+      <section class="tasks-section" aria-labelledby="plan-label">
+        <div class="section-heading">
+          <div><h2 id="plan-label">Your plan</h2><p id="plan-count" class="muted"></p></div>
+          <button class="button primary" type="button" data-add-task>+ Add task</button>
+        </div>
+        <ul id="today-list" class="task-list"></ul>
+        <p class="empty panel" id="today-empty" hidden>Add a task you want to work on today.</p>
+      </section>
+    </section>
+
+    <section id="tasks" class="view" aria-labelledby="tasks-title" hidden>
+      <div class="page-title section-heading">
+        <h1 id="tasks-title">Tasks</h1>
+        <button class="button primary" type="button" data-add-task>+ Add task</button>
+      </div>
+      <ul id="all-list" class="task-list"></ul>
+      <p class="empty panel" id="all-empty" hidden>Your captured tasks will appear here.</p>
+    </section>
+
+    <section id="settings" class="view" aria-labelledby="settings-title" hidden>
+      <div class="page-title"><h1 id="settings-title">Settings</h1></div>
+      <form id="preferences" class="panel settings-panel">
+        <h2>Focus</h2>
+        <label for="focus-duration">Session duration in minutes</label>
+        <input id="focus-duration" name="duration" type="number" min="1" max="480" required>
+        <div id="windows-settings" hidden>
+          <label class="check-label"><input name="startup" type="checkbox"> Open Today when I sign in to Windows</label>
+          <label class="check-label"><input name="automatic" type="checkbox"> Start focus on the first sign-in each day</label>
+        </div>
+        <div id="browser-settings" hidden>
+          <label for="focus-domains">Chrome domains to block</label>
+          <textarea id="focus-domains" name="domains" rows="3" aria-describedby="domains-help"></textarea>
+          <p id="domains-help" class="muted">One domain per line. Changes apply to future sessions.</p>
+        </div>
+        <button class="button primary" type="submit">Save settings</button>
+        <p id="settings-feedback" class="feedback" role="status"></p>
+      </form>
+
+      <section id="chrome-pairing" class="panel settings-panel" aria-labelledby="chrome-title" hidden>
+        <h2 id="chrome-title">Pair Chrome</h2>
+        <p>Paste this code into the Fix Myself Focus extension. Keep it private.</p>
+        <label for="pairing-code">Pairing code</label>
+        <input type="password" id="pairing-code" readonly>
+        <button type="button" class="button secondary" id="copy-pairing">Copy code</button>
+        <p id="pairing-feedback" class="feedback" role="status"></p>
+      </section>
+    </section>
+    <p id="app-feedback" class="feedback" role="alert" hidden></p>
+  </main>
+
+  <dialog id="task-dialog" aria-labelledby="task-dialog-title">
+    <form id="task-form">
+      <h2 id="task-dialog-title">Add task</h2>
+      <label for="task-title">Task title</label>
+      <input id="task-title" name="title" maxlength="160" required autofocus>
+      <label for="task-date">Planned date</label>
+      <input id="task-date" name="plannedDate" type="date">
+      <label for="task-deadline">Deadline</label>
+      <input id="task-deadline" name="deadline" type="datetime-local">
+      <label class="check-label"><input name="pinned" type="checkbox"> Pin as a priority</label>
+      <p id="task-feedback" class="feedback" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-close-dialog>Cancel</button>
+        <button class="button primary" type="submit">Save task</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="mission-dialog" aria-labelledby="mission-title">
+    <form id="mission-form">
+      <h2 id="mission-title">Your mission</h2>
+      <label for="mission-input">What do you want to keep in mind?</label>
+      <textarea id="mission-input" name="mission" maxlength="240" rows="4" autofocus></textarea>
+      <p id="mission-feedback" class="feedback" role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" data-close-dialog>Cancel</button>
+        <button class="button primary" type="submit">Save mission</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

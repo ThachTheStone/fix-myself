@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Fix Myself Focus",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Show your next planned task when a focus session blocks a site.",
+  "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_popup": "popup.html" },
+  "web_accessible_resources": [
+    { "resources": ["blocked.html"], "matches": ["http://*/*", "https://*/*"] }
+  ]
+}

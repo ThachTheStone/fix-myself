@@ -1,0 +1,28 @@
+:root { font: 16px/1.5 "Segoe UI", system-ui, sans-serif; color: #183d2f; background: #f6f5ef; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+h1, h2, p { margin: 0; }
+button, input, .button { font: inherit; }
+button, .button {
+  display: inline-block; border: 1px solid transparent; border-radius: 8px;
+  background: #183d2f; color: #fffef9; padding: 8px 12px; font-weight: 650;
+  text-decoration: none; cursor: pointer;
+}
+button:disabled { opacity: .65; }
+:focus-visible { outline: 3px solid #557d28; outline-offset: 3px; }
+.popup { margin: 0; padding: 18px; width: 310px; }
+.popup h1 { font-size: 1.15rem; margin-bottom: 6px; }
+.popup p { font-size: .88rem; }
+.popup label { display: block; margin-top: 11px; font-weight: 650; }
+.popup input { margin: 3px 0 8px; width: 100%; padding: 7px 8px; border: 1px solid #c7d2c4; border-radius: 7px; }
+.popup .secondary { background: #fffef9; color: #183d2f; border-color: #c7d2c4; margin-top: 10px; }
+#feedback:not(:empty) { color: #774321; margin-top: 7px; }
+.intervention { display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 24px; }
+.intervention main { width: min(630px, 100%); background: #fffef9; padding: clamp(24px, 7vw, 52px); border: 1px solid #d9dfd4; border-radius: 20px; }
+.intervention h1 { font-size: clamp(2rem, 6vw, 3.3rem); line-height: 1.05; letter-spacing: -.065em; margin: 8px 0 10px; }
+.eyebrow { color: #42574a; font-size: .76rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.muted { color: #42574a; overflow-wrap: anywhere; }
+.time { font-size: 2.6rem; font-weight: 650; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
+#next { margin-top: 18px; padding: 14px 16px; background: #e7efde; border-radius: 10px; }
+#task { overflow-wrap: anywhere; margin-top: 3px; font-weight: 650; }
+.intervention .button { margin-top: 12px; }

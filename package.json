@@ -1,0 +1,42 @@
+{
+  "name": "fix-myself",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first personal planner and focus app",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js",
+    "test:browser": "node --test tests/browser.e2e.js",
+    "desktop": "npm run build && electron .",
+    "desktop:package": "npm run build && electron-builder --win nsis",
+    "android:sync": "npm run build && cap sync android",
+    "android:open": "npm run android:sync && cap open android"
+  },
+  "devDependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/core": "8.6.2",
+    "@capacitor/cli": "8.6.2",
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0",
+    "playwright-core": "1.65.1",
+    "vite": "8.3.8"
+  },
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0"
+  },
+  "build": {
+    "appId": "com.fixmyself.app",
+    "productName": "Fix Myself",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json"
+    ]
+  }
+}
