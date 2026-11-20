@@ -6,13 +6,16 @@
 
 | Phần | Điểm vào và trách nhiệm |
 |---|---|
-| Giao diện | [index.html](../index.html), [app/main.js](../app/main.js) và [app/styles.css](../app/styles.css). Vite build chung giao diện Today, Tasks và Settings cho desktop, Android và bản xem trước trên trình duyệt. |
-| Logic và dữ liệu cục bộ | [app/model.js](../app/model.js) xử lý nhiệm vụ, ưu tiên, kế hoạch trong ngày và phiên focus. Trạng thái lưu theo thiết bị trong `localStorage` với khóa `fix-myself:v1`. Bản nền dùng ngày theo giờ cục bộ của thiết bị. |
+| Giao diện | [index.html](../index.html), [app/main.js](../app/main.js) và [app/styles.css](../app/styles.css). Vite build chung các màn Today, Tasks, chi tiết task (`#task/<id>`), Review và Settings cho desktop, Android và bản xem trước trên trình duyệt. |
+| Logic và dữ liệu cục bộ | [app/model.js](../app/model.js) là các hàm thuần cho task (trạng thái, cam kết, subtask, work block, hạn gốc và hạn sửa, timeline), Today (việc tiếp theo, carryover, hạn sắp tới, inbox), focus, nhắc nhở, đồng bộ, review tuần và workout. Trạng thái lưu trong `localStorage` khóa `fix-myself:v1` với `version: 2`; bản v1 được chuyển đổi khi đọc. Ngày kế hoạch theo `settings.timeZone`. Định danh thiết bị nằm ở khóa riêng `fix-myself:device`. |
+| Nhắc nhở | Model dựng lại `reminders` từ task sau mỗi thay đổi: giữ trạng thái snooze khi mốc không đổi, thay mới khi mốc đổi, bỏ khi task hoàn thành, hủy hoặc bị xóa. [app/notify.js](../app/notify.js) dùng Web Notification trên Electron và trình duyệt khi app đang chạy, và `@capacitor/local-notifications` để Android hẹn giờ với hệ điều hành. |
+| Đồng bộ | Mỗi trường đồng bộ có dấu `thời điểm ISO|id thiết bị`. `mergeSync` lấy giá trị mới hơn, ghi xung đột khi cả hai thiết bị sửa cùng trường sau lần gộp trước, và giữ tombstone trong `deleted` để task đã xóa không quay lại. Phương tiện hiện tại là file hoặc dữ liệu dán trong Settings. Focus, nhắc nhở, xung đột và `peers` là dữ liệu riêng từng thiết bị. |
+| Ảnh workout | [app/photos.js](../app/photos.js) lưu ảnh đã thu nhỏ trong IndexedDB của thiết bị. File đồng bộ chỉ mang cờ `hasPhoto`. |
 | Desktop | [desktop/main.cjs](../desktop/main.cjs) quản lý cửa sổ Electron và tùy chọn khởi chạy sau khi đăng nhập Windows. [desktop/preload.cjs](../desktop/preload.cjs) cung cấp API IPC giới hạn cho giao diện. |
 | Kết nối với Chrome | [desktop/focus-bridge.cjs](../desktop/focus-bridge.cjs) cung cấp `GET /v1/focus` trên `127.0.0.1:42631`. Extension dùng mã ghép nối để đọc phiên hiện tại. |
 | Chrome | [extension/worker.js](../extension/worker.js) đọc và lưu phiên, áp dụng rule Manifest V3 và dọn rule khi hết hạn. [extension/blocked.js](../extension/blocked.js) hiển thị việc tiếp theo và thời gian còn lại. |
 | Android | [android/](../android/) chứa dự án Capacitor. [capacitor.config.json](../capacitor.config.json) trỏ tới thư mục build `dist/`. APK hiện có trình lập kế hoạch và bộ hẹn giờ cục bộ. |
-| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra quy tắc lập kế hoạch và focus. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner và extension trong Chromium. |
+| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, đồng bộ file giữa hai profile và extension trong Chromium. |
 
 ### Luồng Windows đến Chrome
 
@@ -23,6 +26,19 @@
 
 Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cục bộ. Extension chỉ cần hạn kết thúc, danh sách tên miền và tiêu đề việc tiếp theo để áp dụng luồng này.
 
+## Trạng thái theo SRS
+
+| Phạm vi | Trạng thái |
+|---|---|
+| DAY-01, FOC-01 đến FOC-05 | Có trong bản nền. Chờ nghiệm thu A-01, A-02 trên Windows 11 thật. |
+| DAY-02, TASK-01, TASK-02 | Đã làm: mission, tối đa ba ưu tiên, chọn việc tiếp theo, carryover giữ hạn, quick capture vào inbox, bốn trạng thái, cam kết, subtask, ước lượng, tiêu chí hoàn thành, work block và timeline. |
+| REM-01, REM-02 | Đã làm: lead time, snooze, thiết bị nhận mặc định, thay khi mốc đổi, hủy khi hoàn thành, gom nhắc nhở quá hạn và hiển thị trạng thái quyền. Trên Windows nhắc nhở chỉ hiện khi app đang chạy. Trên Android cần kiểm tra trên máy POCO. |
+| SYS-01, SYS-02 | ID ổn định, múi giờ kế hoạch, gộp theo trường, xung đột và tombstone đã có. Chưa có dịch vụ đồng bộ qua mạng, nên chưa đạt mục tiêu 30 giây của SYS-06. |
+| SYS-05 | Xuất và xóa dữ liệu người dùng tạo đã có. |
+| REV-01, REV-04 | Đã làm review giao hàng theo tuần và nhật ký workout có ảnh lưu cục bộ. |
+| REV-02 | Người dùng tự xác nhận kết quả. Phần AI đề xuất chờ AI-01 đến AI-04. |
+| REV-03, FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
+
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo
 
 | Phần | Hướng đã đề xuất |
@@ -30,7 +46,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | Windows | C# với **.NET 10 LTS**, WPF, CommunityToolkit.Mvvm và SQLite. Chuyển luồng Today → focus → Chrome trước. Khi thiết kế lưu trữ mới, đánh giá cách mang dữ liệu planner từ bản Electron sang. |
 | Chrome | Giữ Manifest V3 và các bài kiểm thử hành vi. Xem xét chuyển từ loopback sang Chrome Native Messaging sau khi WPF chạy được luồng chính. |
 | Android | Giữ Capacitor dùng được trong lúc thử nghiệm quyền và hành vi trên máy POCO. Kotlin, Jetpack Compose và Room là hướng native được đề xuất. |
-| Đồng bộ và tích hợp | ASP.NET Core và PostgreSQL là phương án khi bắt đầu đồng bộ nhiều thiết bị. GitHub Issues, Google Calendar và AI vẫn thuộc các giai đoạn triển khai trong SRS. |
+| Đồng bộ và tích hợp | ASP.NET Core và PostgreSQL là phương án khi bắt đầu đồng bộ nhiều thiết bị. Dịch vụ nên nhận và trả đúng payload `fix-myself-sync` hiện tại để dùng lại `mergeSync`. GitHub Issues, Google Calendar và AI vẫn thuộc các giai đoạn triển khai trong SRS. |
 | iPhone | SwiftUI và Screen Time API là hướng đánh giá sau. |
 
 Mốc Windows đầu tiên cần chứng minh người dùng đăng nhập, thấy Today, mở trang đã chọn và thấy việc tiếp theo trong Chrome. Kiểm tra cả trường hợp Chrome đã mở sẵn, desktop mất kết nối, và phiên hết hạn. Đối chiếu A-01 và A-02 trong [SRS.md](../SRS.md).

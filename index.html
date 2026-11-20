@@ -4,17 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f6f5ef">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>Fix Myself</title>
   <link rel="stylesheet" href="/app/styles.css">
   <script type="module" src="/app/main.js"></script>
 </head>
 <body>
   <header class="shell topbar">
-    <a class="brand" href="#today" aria-label="Fix Myself home"><span class="brand-mark" aria-hidden="true">◒</span> Fix Myself</a>
+    <a class="brand" href="#today" aria-label="Fix Myself home"><span class="brand-mark" aria-hidden="true">◒</span> <span class="brand-name">Fix Myself</span></a>
     <nav aria-label="Main navigation">
       <a href="#today" class="nav-link">Today</a>
       <a href="#tasks" class="nav-link">Tasks</a>
+      <a href="#review" class="nav-link">Review</a>
       <a href="#settings" class="nav-link">Settings</a>
     </nav>
   </header>
@@ -25,6 +26,14 @@
         <p class="eyebrow" id="today-date"></p>
         <h1 id="today-title">Today</h1>
       </div>
+
+      <section id="reminders-panel" class="panel notice" aria-labelledby="reminders-title" hidden>
+        <h2 id="reminders-title">Reminders</h2>
+        <p id="reminders-missed" class="muted" hidden></p>
+        <ul id="reminder-list" class="compact-list"></ul>
+      </section>
+      <p id="conflict-notice" class="panel notice" hidden><span id="conflict-text"></span> <a href="#settings" class="text-link">Review in Settings</a></p>
+
       <div class="overview">
         <section class="mission panel" aria-labelledby="mission-label">
           <h2 class="eyebrow" id="mission-label">Your mission</h2>
@@ -38,6 +47,15 @@
           <p id="focus-status" class="focus-status" role="status"></p>
         </section>
       </div>
+
+      <section class="panel next-panel" aria-labelledby="next-label">
+        <h2 class="eyebrow" id="next-label">Next action</h2>
+        <p id="next-title" class="next-title"></p>
+        <p id="next-step" class="muted"></p>
+        <label for="next-select">Choose the next action</label>
+        <select id="next-select"></select>
+      </section>
+
       <section class="tasks-section" aria-labelledby="plan-label">
         <div class="section-heading">
           <div><h2 id="plan-label">Your plan</h2><p id="plan-count" class="muted"></p></div>
@@ -46,6 +64,16 @@
         <ul id="today-list" class="task-list"></ul>
         <p class="empty panel" id="today-empty" hidden>Add a task you want to work on today.</p>
       </section>
+
+      <section class="tasks-section" id="carryover-section" aria-labelledby="carryover-label" hidden>
+        <div class="section-heading"><div><h2 id="carryover-label">Carried over</h2><p class="muted">Unfinished work planned for an earlier day. Deadlines stay as they are.</p></div></div>
+        <ul id="carryover-list" class="task-list"></ul>
+      </section>
+
+      <section class="tasks-section" id="deadline-section" aria-labelledby="deadline-label" hidden>
+        <div class="section-heading"><h2 id="deadline-label">Approaching deadlines</h2></div>
+        <ul id="deadline-list" class="task-list"></ul>
+      </section>
     </section>
 
     <section id="tasks" class="view" aria-labelledby="tasks-title" hidden>
@@ -53,8 +81,187 @@
         <h1 id="tasks-title">Tasks</h1>
         <button class="button primary" type="button" data-add-task>+ Add task</button>
       </div>
-      <ul id="all-list" class="task-list"></ul>
-      <p class="empty panel" id="all-empty" hidden>Your captured tasks will appear here.</p>
+      <form id="capture-form" class="capture panel">
+        <label for="capture-title">Quick capture</label>
+        <div class="inline-fields">
+          <input id="capture-title" name="title" maxlength="160" placeholder="What needs doing?" required>
+          <button class="button primary" type="submit">Capture</button>
+        </div>
+        <p id="capture-feedback" class="feedback" role="status"></p>
+      </form>
+      <section class="tasks-section" aria-labelledby="inbox-label">
+        <div class="section-heading"><div><h2 id="inbox-label">Inbox</h2><p class="muted">Captured tasks you have not planned or committed to yet.</p></div></div>
+        <ul id="inbox-list" class="task-list"></ul>
+        <p class="empty panel" id="inbox-empty" hidden>Your inbox is clear.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="planned-label">
+        <div class="section-heading"><h2 id="planned-label">Planned and committed</h2></div>
+        <ul id="planned-list" class="task-list"></ul>
+        <p class="empty panel" id="planned-empty" hidden>Plan a date, add a work block or commit to a task to see it here.</p>
+      </section>
+      <details class="tasks-section">
+        <summary><h2 class="inline-heading">Completed and canceled</h2> <span id="closed-count" class="muted"></span></summary>
+        <ul id="closed-list" class="task-list"></ul>
+      </details>
+    </section>
+
+    <section id="task" class="view" aria-labelledby="detail-title" hidden>
+      <a href="#tasks" class="text-link back-link">← All tasks</a>
+      <div class="page-title"><p class="eyebrow" id="detail-status"></p><h1 id="detail-title" class="detail-heading"></h1></div>
+      <p id="detail-missing" class="empty panel" hidden>This task is no longer available.</p>
+      <div id="detail-body" class="detail-grid">
+        <form id="detail-form" class="panel settings-panel">
+          <h2>Details</h2>
+          <label for="detail-input-title">Title</label>
+          <input id="detail-input-title" name="title" maxlength="160" required>
+          <div class="field-row">
+            <div><label for="detail-input-status">Status</label>
+              <select id="detail-input-status" name="status">
+                <option value="open">Open</option><option value="in_progress">In progress</option>
+                <option value="completed">Completed</option><option value="canceled">Canceled</option>
+              </select></div>
+            <div><label for="detail-input-effort">Effort estimate (minutes)</label>
+              <input id="detail-input-effort" name="effortMinutes" type="number" min="1" max="10000"></div>
+          </div>
+          <div class="field-row">
+            <div><label for="detail-input-date">Planned date</label><input id="detail-input-date" name="plannedDate" type="date"></div>
+            <div><label for="detail-input-deadline">Deadline</label><input id="detail-input-deadline" name="deadline" type="datetime-local"></div>
+          </div>
+          <p id="detail-original-deadline" class="muted" hidden></p>
+          <label for="detail-input-next">Next step</label>
+          <input id="detail-input-next" name="nextStep" maxlength="200" placeholder="The very next physical action">
+          <label for="detail-input-criteria">Completion criteria</label>
+          <textarea id="detail-input-criteria" name="criteria" maxlength="1000" rows="3" placeholder="How will you know it is done?"></textarea>
+          <label class="check-label"><input name="pinned" type="checkbox"> Pin as a priority</label>
+          <label class="check-label"><input name="supportsMission" type="checkbox"> Supports my mission</label>
+          <fieldset>
+            <legend>Reminders</legend>
+            <label class="check-label"><input name="remindStart" type="checkbox"> Before each work block starts</label>
+            <label class="check-label"><input name="remindDeadline" type="checkbox"> Before the deadline</label>
+          </fieldset>
+          <div class="form-actions">
+            <button class="button primary" type="submit">Save details</button>
+            <button class="button secondary danger" type="button" id="delete-task">Delete task</button>
+          </div>
+          <p id="detail-feedback" class="feedback" role="status"></p>
+        </form>
+
+        <div class="detail-side">
+          <section class="panel settings-panel" aria-labelledby="commit-label">
+            <h2 id="commit-label">Commitment</h2>
+            <div id="commitment-view" hidden>
+              <p id="commitment-outcome" class="strong"></p>
+              <p id="commitment-time" class="muted"></p>
+              <button type="button" class="text-button" id="remove-commitment">Remove commitment</button>
+            </div>
+            <form id="commitment-form">
+              <label for="commit-outcome">Outcome you commit to deliver</label>
+              <input id="commit-outcome" name="outcome" maxlength="240" required>
+              <label for="commit-time">Committed at</label>
+              <input id="commit-time" name="committedAt" type="datetime-local" required>
+              <button class="button primary" type="submit">Commit</button>
+            </form>
+            <p id="commitment-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" aria-labelledby="subtasks-label">
+            <h2 id="subtasks-label">Subtasks</h2>
+            <ul id="subtask-list" class="compact-list"></ul>
+            <form id="subtask-form" class="inline-fields">
+              <label for="subtask-title" class="visually-hidden">New subtask</label>
+              <input id="subtask-title" name="title" maxlength="160" placeholder="Add a subtask" required>
+              <button class="button secondary" type="submit">Add</button>
+            </form>
+            <p id="subtask-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" aria-labelledby="blocks-label">
+            <h2 id="blocks-label">Work blocks</h2>
+            <p class="muted">Rescheduling a block keeps the deadline.</p>
+            <ul id="block-list" class="compact-list"></ul>
+            <form id="block-form">
+              <div class="field-row">
+                <div><label for="block-start">Start</label><input id="block-start" name="start" type="datetime-local" required></div>
+                <div><label for="block-end">End</label><input id="block-end" name="end" type="datetime-local" required></div>
+              </div>
+              <button class="button secondary" type="submit">Add work block</button>
+            </form>
+            <p id="block-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" id="review-panel" aria-labelledby="quality-label" hidden>
+            <h2 id="quality-label">Completion review</h2>
+            <p id="review-criteria" class="muted"></p>
+            <form id="review-form">
+              <label for="review-evidence">What was delivered, and what evidence do you have?</label>
+              <textarea id="review-evidence" name="evidence" rows="3" maxlength="1000"></textarea>
+              <label for="review-result">Result</label>
+              <select id="review-result" name="result">
+                <option value="unreviewed">Unreviewed</option><option value="met">Met</option>
+                <option value="partly_met">Partly met</option><option value="needs_review">Needs review</option>
+              </select>
+              <button class="button secondary" type="submit">Confirm review</button>
+            </form>
+            <p id="review-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" aria-labelledby="timeline-label">
+            <h2 id="timeline-label">Timeline</h2>
+            <ol id="timeline-list" class="timeline"></ol>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="review" class="view" aria-labelledby="review-title" hidden>
+      <div class="page-title section-heading">
+        <div><p class="eyebrow" id="review-range"></p><h1 id="review-title">Weekly review</h1></div>
+        <div class="button-group">
+          <button type="button" class="button secondary" id="review-prev" aria-label="Previous week">←</button>
+          <button type="button" class="button secondary" id="review-this">This week</button>
+          <button type="button" class="button secondary" id="review-next" aria-label="Next week">→</button>
+        </div>
+      </div>
+      <dl class="stats" id="review-stats"></dl>
+      <section class="tasks-section" aria-labelledby="quality-summary-label">
+        <h2 id="quality-summary-label">Completion quality</h2>
+        <p id="quality-summary" class="muted"></p>
+      </section>
+      <section class="tasks-section" aria-labelledby="rescheduled-label">
+        <h2 id="rescheduled-label">Rescheduled</h2>
+        <ul id="rescheduled-list" class="task-list"></ul>
+        <p class="muted" id="rescheduled-empty" hidden>No revised deadlines in this period.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="missed-label">
+        <h2 id="missed-label">Still open</h2>
+        <ul id="missed-list" class="task-list"></ul>
+        <p class="muted" id="missed-empty" hidden>Nothing due in this period is still open.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="undated-label">
+        <h2 id="undated-label">Commitments without a deadline</h2>
+        <ul id="undated-list" class="task-list"></ul>
+        <p class="muted" id="undated-empty" hidden>Every commitment has a deadline.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="distraction-label">
+        <h2 id="distraction-label">Distractions</h2>
+        <p class="muted">Blocked Chrome attempts and Android usage minutes are not reported yet. They will appear here once usage reporting is connected.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="workout-label">
+        <h2 id="workout-label">Workouts</h2>
+        <form id="workout-form" class="panel settings-panel">
+          <div class="field-row">
+            <div><label for="workout-date">Date</label><input id="workout-date" name="date" type="date" required></div>
+            <div><label for="workout-type">Type</label><select id="workout-type" name="type"></select></div>
+            <div><label for="workout-minutes">Minutes</label><input id="workout-minutes" name="minutes" type="number" min="1" max="1440" required></div>
+          </div>
+          <label for="workout-photo">Photo (optional, stays on this device)</label>
+          <input id="workout-photo" name="photo" type="file" accept="image/*">
+          <button class="button primary" type="submit">Log workout</button>
+          <p id="workout-feedback" class="feedback" role="status"></p>
+        </form>
+        <ul id="workout-list" class="task-list"></ul>
+        <p class="muted" id="workout-empty" hidden>No workouts logged this week.</p>
+      </section>
     </section>
 
     <section id="settings" class="view" aria-labelledby="settings-title" hidden>
@@ -72,9 +279,59 @@
           <textarea id="focus-domains" name="domains" rows="3" aria-describedby="domains-help"></textarea>
           <p id="domains-help" class="muted">One domain per line. Changes apply to future sessions.</p>
         </div>
-        <button class="button primary" type="submit">Save settings</button>
+        <button class="button primary" type="submit">Save focus settings</button>
         <p id="settings-feedback" class="feedback" role="status"></p>
       </form>
+
+      <form id="planning-form" class="panel settings-panel">
+        <h2>Planning and reminders</h2>
+        <label for="planning-zone">Planning time zone</label>
+        <select id="planning-zone" name="timeZone" aria-describedby="zone-help"></select>
+        <p id="zone-help" class="muted">Days start at midnight in this time zone. Running focus sessions keep their end time.</p>
+        <label for="lead-start">Remind before a work block (minutes)</label>
+        <input id="lead-start" name="leadStart" inputmode="numeric" aria-describedby="lead-help">
+        <label for="lead-deadline">Remind before a deadline (minutes)</label>
+        <input id="lead-deadline" name="leadDeadline" inputmode="numeric" aria-describedby="lead-help">
+        <p id="lead-help" class="muted">Separate several lead times with commas, for example 1440, 60.</p>
+        <label for="notify-device">Send reminders to</label>
+        <select id="notify-device" name="notifyDevice"></select>
+        <button class="button primary" type="submit">Save planning settings</button>
+        <p id="planning-feedback" class="feedback" role="status"></p>
+      </form>
+
+      <section class="panel settings-panel" aria-labelledby="notify-title">
+        <h2 id="notify-title">Notifications on this device</h2>
+        <p id="notify-status"></p>
+        <p id="notify-timing" class="muted"></p>
+        <button type="button" class="button secondary" id="notify-allow" hidden>Allow notifications</button>
+        <button type="button" class="button secondary" id="notify-exact" hidden>Allow exact timing</button>
+      </section>
+
+      <section class="panel settings-panel" id="sync" aria-labelledby="sync-title">
+        <h2 id="sync-title">Devices and sync</h2>
+        <p class="muted">Move your plan between devices with a sync file. Changes merge by field. If both devices changed the same field, you choose which value to keep. Deleted tasks stay deleted.</p>
+        <label for="device-name">This device's name</label>
+        <div class="inline-fields">
+          <input id="device-name" maxlength="40">
+          <button type="button" class="button secondary" id="save-device">Rename</button>
+        </div>
+        <div class="button-group">
+          <button type="button" class="button secondary" id="sync-download">Download sync file</button>
+          <button type="button" class="button secondary" id="sync-copy">Copy sync data</button>
+        </div>
+        <label for="sync-file">Merge a sync file from another device</label>
+        <input id="sync-file" type="file" accept="application/json,.json">
+        <label for="sync-text">Or paste sync data</label>
+        <textarea id="sync-text" rows="3"></textarea>
+        <button type="button" class="button primary" id="sync-merge">Merge into this device</button>
+        <p id="sync-feedback" class="feedback" role="status"></p>
+        <div id="conflicts" hidden>
+          <h3>Needs your choice</h3>
+          <ul id="conflict-list" class="compact-list"></ul>
+        </div>
+        <h3>Known devices</h3>
+        <ul id="device-list" class="compact-list"></ul>
+      </section>
 
       <section id="chrome-pairing" class="panel settings-panel" aria-labelledby="chrome-title" hidden>
         <h2 id="chrome-title">Pair Chrome</h2>
@@ -83,6 +340,16 @@
         <input type="password" id="pairing-code" readonly>
         <button type="button" class="button secondary" id="copy-pairing">Copy code</button>
         <p id="pairing-feedback" class="feedback" role="status"></p>
+      </section>
+
+      <section class="panel settings-panel" aria-labelledby="data-title">
+        <h2 id="data-title">Your data</h2>
+        <p>Your plan is stored on this device. It leaves the device only when you download or copy a sync file. Workout photos stay on the device that added them. Chrome receives only the focus end time, blocked domains and the next action title.</p>
+        <div class="button-group">
+          <button type="button" class="button secondary" id="export-data">Export my data</button>
+          <button type="button" class="button secondary danger" id="erase-data">Delete all my data</button>
+        </div>
+        <p id="data-feedback" class="feedback" role="status"></p>
       </section>
     </section>
     <p id="app-feedback" class="feedback" role="alert" hidden></p>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -36,8 +36,8 @@ test('the planner captures and reloads a mission and a dated task on a narrow sc
   await page.getByLabel('What do you want to keep in mind?').fill('Finish the proposal');
   await page.getByRole('button', { name: 'Save mission' }).click();
   await page.getByRole('button', { name: '+ Add task' }).click();
-  await page.getByLabel('Task title').fill('Write the outline');
-  await page.getByLabel('Pin as a priority').check();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Write the outline');
+  await page.getByRole('dialog').getByLabel('Pin as a priority').check();
   await page.getByRole('button', { name: 'Save task' }).click();
   await page.reload();
   await page.getByText('Finish the proposal', { exact: true }).waitFor();
@@ -46,6 +46,91 @@ test('the planner captures and reloads a mission and a dated task on a narrow sc
   await page.getByText('1 of 1 complete').waitFor();
   await page.getByRole('button', { name: 'Start focus' }).click();
   await page.getByText('Focus timer is running on this device.').waitFor();
+});
+
+function localInput(date) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+function localDay(date) {
+  return localInput(date).slice(0, 10);
+}
+
+test('tasks move from the inbox to a commitment, keep their deadline when blocks move, and sync to another profile', { timeout: 60_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const url = `http://127.0.0.1:${app.httpServer.address().port}`;
+  const context = await launch(t);
+  const page = await context.newPage();
+  await page.goto(url + '/#tasks');
+
+  await page.getByLabel('Quick capture').fill('Prepare the proposal');
+  await page.getByRole('button', { name: 'Capture' }).click();
+  const inbox = page.locator('#inbox-list');
+  await inbox.getByText('Prepare the proposal').waitFor();
+  await inbox.getByRole('link', { name: 'Open Prepare the proposal' }).click();
+
+  const detail = page.locator('#task');
+  const now = new Date();
+  const deadline = new Date(now.getTime() + 3 * 86_400_000);
+  deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
+  await detail.getByLabel('Completion criteria').fill('Sent to the client');
+  await page.getByRole('button', { name: 'Save details' }).click();
+  await page.getByText('Saved.').waitFor();
+
+  await page.getByLabel('Outcome you commit to deliver').fill('Proposal sent');
+  await page.getByRole('button', { name: 'Commit', exact: true }).click();
+  await page.getByText('Proposal sent', { exact: true }).waitFor();
+
+  const blockStart = new Date(deadline.getTime() - 86_400_000);
+  blockStart.setHours(9, 0, 0, 0);
+  await detail.getByLabel('Start', { exact: true }).fill(localInput(blockStart));
+  await detail.getByLabel('End', { exact: true }).fill(localInput(new Date(blockStart.getTime() + 2 * 3_600_000)));
+  await page.getByRole('button', { name: 'Add work block' }).click();
+  await page.getByText('Work block added.').waitFor();
+  const moved = new Date(blockStart.getTime() - 86_400_000);
+  await page.getByLabel('Block 1 start').fill(localInput(moved));
+  await page.getByLabel('Block 1 end').fill(localInput(new Date(moved.getTime() + 3_600_000)));
+  await page.getByRole('button', { name: 'Reschedule' }).click();
+  await page.getByText('Work block rescheduled. The deadline is unchanged.').waitFor();
+  assert.equal(await detail.getByLabel('Deadline', { exact: true }).inputValue(), localInput(deadline));
+  await page.locator('#timeline-list').getByText('Work block moved from', { exact: false }).waitFor();
+  await page.locator('#timeline-list').getByText('Committed to “Proposal sent”', { exact: false }).waitFor();
+
+  await page.getByRole('link', { name: '← All tasks' }).click();
+  await page.locator('#inbox-empty').waitFor();
+  await page.locator('#planned-list').getByText('Prepare the proposal').waitFor();
+
+  await page.getByRole('link', { name: 'Today' }).click();
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByLabel('Task title').fill('Leftover from yesterday');
+  await page.getByRole('dialog').getByLabel('Planned date').fill(localDay(new Date(now.getTime() - 86_400_000)));
+  await page.getByRole('button', { name: 'Save task' }).click();
+  await page.locator('#carryover-list').getByText('Leftover from yesterday').waitFor();
+  await page.getByRole('button', { name: 'Add Leftover from yesterday to today' }).click();
+  await page.locator('#today-list').getByText('Leftover from yesterday').waitFor();
+  await page.getByLabel('Choose the next action').selectOption({ label: 'Prepare the proposal' });
+  await page.locator('#next-title').getByText('Prepare the proposal').waitFor();
+
+  await page.getByRole('link', { name: 'Review' }).click();
+  await page.locator('#review-stats').getByText('Commitments due').waitFor();
+
+  await page.getByRole('link', { name: 'Settings' }).click();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download sync file' }).click()
+  ]);
+  const syncFile = await download.path();
+  assert.match(await readFile(syncFile, 'utf8'), /fix-myself-sync/);
+
+  const other = await (await launch(t)).newPage();
+  await other.goto(url + '/#settings');
+  await other.getByLabel('Merge a sync file from another device').setInputFiles(syncFile);
+  await other.getByRole('button', { name: 'Merge into this device' }).click();
+  await other.getByText('2 added', { exact: false }).waitFor();
+  await other.getByRole('link', { name: 'Tasks' }).click();
+  await other.locator('#planned-list').getByText('Prepare the proposal').waitFor();
 });
 
 test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000 }, async (t) => {

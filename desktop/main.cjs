@@ -95,6 +95,9 @@ function createWindow() {
   mainWindow.loadFile(join(__dirname, '../dist/index.html')).catch(console.error);
 }
 
+// Windows shows reminder notifications under this application identity.
+if (process.platform === 'win32') app.setAppUserModelId('com.fixmyself.app');
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
