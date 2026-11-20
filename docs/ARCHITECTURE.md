@@ -11,8 +11,8 @@
 | Nhắc nhở | Model dựng lại `reminders` từ task sau mỗi thay đổi: giữ trạng thái snooze khi mốc không đổi, thay mới khi mốc đổi, bỏ khi task hoàn thành, hủy hoặc bị xóa. [app/notify.js](../app/notify.js) dùng Web Notification trên Electron và trình duyệt khi app đang chạy, và `@capacitor/local-notifications` để Android hẹn giờ với hệ điều hành. |
 | Đồng bộ | Mỗi trường đồng bộ có dấu `thời điểm ISO|id thiết bị`. `mergeSync` lấy giá trị mới hơn, ghi xung đột khi cả hai thiết bị sửa cùng trường sau lần gộp trước, và giữ tombstone trong `deleted` để task đã xóa không quay lại. Phương tiện hiện tại là file hoặc dữ liệu dán trong Settings. Focus, nhắc nhở, xung đột và `peers` là dữ liệu riêng từng thiết bị. |
 | Ảnh workout | [app/photos.js](../app/photos.js) lưu ảnh đã thu nhỏ trong IndexedDB của thiết bị. File đồng bộ chỉ mang cờ `hasPhoto`. |
-| Desktop | [desktop/main.cjs](../desktop/main.cjs) quản lý cửa sổ Electron và tùy chọn khởi chạy sau khi đăng nhập Windows. [desktop/preload.cjs](../desktop/preload.cjs) cung cấp API IPC giới hạn cho giao diện. |
-| Kết nối với Chrome | [desktop/focus-bridge.cjs](../desktop/focus-bridge.cjs) cung cấp `GET /v1/focus` trên `127.0.0.1:42631`. Extension dùng mã ghép nối để đọc phiên hiện tại. |
+| Desktop | [desktop/main.cjs](../desktop/main.cjs) quản lý cửa sổ Electron, biểu tượng ở vùng thông báo, tùy chọn chạy nền khi đóng cửa sổ và tùy chọn khởi chạy sau khi đăng nhập Windows. [desktop/preload.cjs](../desktop/preload.cjs) cung cấp API IPC giới hạn cho giao diện. |
+| Kết nối với Chrome | [desktop/focus-bridge.cjs](../desktop/focus-bridge.cjs) cung cấp `GET /v1/focus` và `POST /v1/report` trên `127.0.0.1:42631`. Extension dùng mã ghép nối để đọc phiên hiện tại và gửi báo cáo gồm id profile, tên profile, các ngày Chrome chạy và tổng số lần bị chặn theo tên miền mỗi ngày. Bridge từ chối URL, payload quá 16 KB và dữ liệu sai dạng. Renderer lấy báo cáo qua IPC và lưu trong `state.chrome`, không đưa vào file đồng bộ. |
 | Chrome | [extension/worker.js](../extension/worker.js) đọc và lưu phiên, áp dụng rule Manifest V3 và dọn rule khi hết hạn. [extension/blocked.js](../extension/blocked.js) hiển thị việc tiếp theo và thời gian còn lại. |
 | Android | [android/](../android/) chứa dự án Capacitor. [capacitor.config.json](../capacitor.config.json) trỏ tới thư mục build `dist/`. APK hiện có trình lập kế hoạch và bộ hẹn giờ cục bộ. |
 | Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, đồng bộ file giữa hai profile và extension trong Chromium. |
@@ -32,12 +32,15 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 |---|---|
 | DAY-01, FOC-01 đến FOC-05 | Có trong bản nền. Chờ nghiệm thu A-01, A-02 trên Windows 11 thật. |
 | DAY-02, TASK-01, TASK-02 | Đã làm: mission, tối đa ba ưu tiên, chọn việc tiếp theo, carryover giữ hạn, quick capture vào inbox, bốn trạng thái, cam kết, subtask, ước lượng, tiêu chí hoàn thành, work block và timeline. |
-| REM-01, REM-02 | Đã làm: lead time, snooze, thiết bị nhận mặc định, thay khi mốc đổi, hủy khi hoàn thành, gom nhắc nhở quá hạn và hiển thị trạng thái quyền. Trên Windows nhắc nhở chỉ hiện khi app đang chạy. Trên Android cần kiểm tra trên máy POCO. |
+| REM-01, REM-02 | Đã làm: lead time, snooze, thiết bị nhận mặc định, thay khi mốc đổi, hủy khi hoàn thành, gom nhắc nhở quá hạn và hiển thị trạng thái quyền. Trên Android cần kiểm tra trên máy POCO. |
 | SYS-01, SYS-02 | ID ổn định, múi giờ kế hoạch, gộp theo trường, xung đột và tombstone đã có. Chưa có dịch vụ đồng bộ qua mạng, nên chưa đạt mục tiêu 30 giây của SYS-06. |
 | SYS-05 | Xuất và xóa dữ liệu người dùng tạo đã có. |
 | REV-01, REV-04 | Đã làm review giao hàng theo tuần và nhật ký workout có ảnh lưu cục bộ. |
 | REV-02 | Người dùng tự xác nhận kết quả. Phần AI đề xuất chờ AI-01 đến AI-04. |
-| REV-03, FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
+| FOC-05 | Settings hiển thị từng profile Chrome là đang được phủ hoặc không khả dụng dựa trên lần báo cáo gần nhất (quá 2 phút là không khả dụng). |
+| REV-03 | Phần Windows đã làm: số lần bị chặn theo trang, ngày thiếu dữ liệu, so sánh tuần trước khi cả hai tuần đủ dữ liệu. Phần Android usage và ngưỡng hằng ngày chưa làm. |
+| REM-02 trên Windows | Đóng cửa sổ thì app chạy tiếp ở vùng thông báo để nhắc nhở và phiên Chrome tiếp tục. |
+| FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
 
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo
 

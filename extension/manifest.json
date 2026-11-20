@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fix Myself Focus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minimum_chrome_version": "120",
   "description": "Show your next planned task when a focus session blocks a site.",
   "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],

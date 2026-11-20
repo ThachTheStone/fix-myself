@@ -136,7 +136,8 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
 test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000 }, async (t) => {
   const token = 'a'.repeat(64);
   let focus = null;
-  const server = bridge.createFocusBridge(token, () => focus);
+  const reports = [];
+  const server = bridge.createFocusBridge(token, () => focus, (report) => reports.push(report));
   server.listen(bridge.PORT, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => server.close());
@@ -166,10 +167,23 @@ test('Chromium blocks existing and new tabs, retains the cached session, and rel
   await existing.goto(website);
   await existing.getByText('Test site').waitFor();
 
-  focus = { endAt: Date.now() + 8500, nextAction: 'Write the outline', domains: ['blocked.test'] };
+  focus = { endAt: Date.now() + 12_000, nextAction: 'Write the outline', domains: ['blocked.test'] };
   await popup.getByRole('button', { name: 'Check connection' }).click();
   await existing.getByText('Write the outline').waitFor();
-  assert.equal(existing.url(), origin + '/blocked.html#blocked.test');
+  assert.equal(existing.url(), origin + '/blocked.html?from=start#blocked.test');
+
+  // A new visit counts as a blocked attempt; the tab redirected at session start does not.
+  const attempt = await context.newPage();
+  await attempt.goto(website);
+  await attempt.getByText('Write the outline').waitFor();
+  await attempt.reload();
+  await attempt.getByText('Write the outline').waitFor();
+  await popup.getByRole('button', { name: 'Check connection' }).click();
+  await popup.getByText('Focus is active.').waitFor();
+  const latest = reports.at(-1);
+  assert.equal(Object.values(latest.attempts).reduce((sum, day) => sum + (day['blocked.test'] ?? 0), 0), 1);
+  assert.equal(latest.activeDays.length, 1);
+  await attempt.close();
 
   await new Promise((resolveClose) => server.close(resolveClose));
   await popup.getByRole('button', { name: 'Check connection' }).click();

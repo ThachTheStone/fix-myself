@@ -1,4 +1,6 @@
-const endpoint = 'http://127.0.0.1:42631/v1/focus';
+const desktopOrigin = 'http://127.0.0.1:42631';
+const endpoint = desktopOrigin + '/v1/focus';
+const KEEP_DAYS = 35;
 const refreshAlarm = 'refresh-focus';
 const endAlarm = 'end-focus';
 let pending = Promise.resolve();
@@ -45,7 +47,7 @@ async function applyFocus(focus, previous) {
       await Promise.allSettled(tabs.map((tab) => {
         const domain = matchDomain(tab.pendingUrl ?? tab.url, domains);
         if (domain && tab.id !== undefined) {
-          return chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blocked.html#' + domain) });
+          return chrome.tabs.update(tab.id, { url: chrome.runtime.getURL('blocked.html?from=start#' + domain) });
         }
       }));
     }
@@ -69,6 +71,55 @@ async function readDesktop(token) {
   return focus;
 }
 
+function localDay(date = new Date()) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function recentDays(list) {
+  return [...new Set(list)].sort().slice(-KEEP_DAYS);
+}
+
+async function profile() {
+  let { profileId, profileName, activeDays = [], attempts = {} } = await chrome.storage.local.get(
+    ['profileId', 'profileName', 'activeDays', 'attempts']);
+  if (!profileId) {
+    profileId = crypto.randomUUID();
+    await chrome.storage.local.set({ profileId });
+  }
+  const today = localDay();
+  if (!activeDays.includes(today)) {
+    activeDays = recentDays([...activeDays, today]);
+    await chrome.storage.local.set({ activeDays });
+  }
+  return { profileId, profileName: profileName ?? '', activeDays, attempts };
+}
+
+// Sends only daily totals per blocked domain and the days Chrome was running.
+async function report(token) {
+  const { profileId, profileName, activeDays, attempts } = await profile();
+  const keep = new Set(recentDays(Object.keys(attempts)));
+  const recent = Object.fromEntries(Object.entries(attempts).filter(([day]) => keep.has(day)));
+  await fetch(desktopOrigin + '/v1/report', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profileId, profileName, activeDays, attempts: recent }),
+    cache: 'no-store',
+    signal: AbortSignal.timeout(2500)
+  });
+}
+
+async function recordAttempt(host) {
+  const { focus, attempts = {} } = await chrome.storage.local.get(['focus', 'attempts']);
+  if (!(focus?.endAt > Date.now()) || !focus.domains.includes(host)) return;
+  const today = localDay();
+  const day = { ...attempts[today], [host]: (attempts[today]?.[host] ?? 0) + 1 };
+  const keep = new Set(recentDays([...Object.keys(attempts), today]));
+  const next = Object.fromEntries(Object.entries({ ...attempts, [today]: day }).filter(([key]) => keep.has(key)));
+  await chrome.storage.local.set({ attempts: next });
+}
+
 async function sync(tokenOverride) {
   const { token, focus: previous } = await chrome.storage.local.get(['token', 'focus']);
   const candidate = tokenOverride ?? token;
@@ -78,6 +129,7 @@ async function sync(tokenOverride) {
     try {
       focus = await readDesktop(candidate);
       connected = true;
+      await report(candidate).catch(console.error);
     } catch (error) {
       if (tokenOverride) throw error;
     }
@@ -93,6 +145,7 @@ async function startup() {
   if (!(await chrome.alarms.get(refreshAlarm))) {
     await chrome.alarms.create(refreshAlarm, { periodInMinutes: 0.5 });
   }
+  await profile();
   return sync();
 }
 
@@ -105,6 +158,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return false;
   let operation;
   if (message?.type === 'sync') operation = startup;
+  if (message?.type === 'attempt' && typeof message.host === 'string') operation = () => recordAttempt(message.host);
+  if (message?.type === 'name' && typeof message.name === 'string') {
+    operation = async () => {
+      await chrome.storage.local.set({ profileName: message.name.trim().slice(0, 60) });
+      return startup();
+    };
+  }
   if (message?.type === 'pair' && /^[a-f0-9]{64}$/.test(message.token)) {
     operation = async () => {
       const { focus } = await chrome.storage.local.get('focus');

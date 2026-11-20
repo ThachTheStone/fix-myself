@@ -19,6 +19,10 @@ npm run dev
 
 The browser preview supports the planner and a local timer. For the Windows sign-in controls and Chrome pairing, run `npm run desktop` on Windows. Run `npm run desktop:package` on Windows to create the installer in `release/`.
 
+VS Code's integrated terminal sets `ELECTRON_RUN_AS_NODE=1`, which stops Electron from opening a window. Run the desktop app from another terminal, or clear the variable first (`Remove-Item Env:ELECTRON_RUN_AS_NODE` in PowerShell).
+
+On Windows, closing the window keeps Fix Myself running in the notification area so reminders and Chrome blocking continue. Choose **Quit Fix Myself** from the notification area icon to exit, or turn off **Keep running in the notification area** in Settings.
+
 ## Windows and Chrome setup
 
 1. In the desktop app, add a task to Today and open **Settings**. Choose your duration and domains. To start focus automatically, enable both **Open Today when I sign in to Windows** and **Start focus on the first sign-in each day**.
@@ -27,6 +31,8 @@ The browser preview supports the planner and a local timer. For the Windows sign
 4. Start focus from Today. Chrome checks for new sessions every 30 seconds. Choose **Check connection** in the extension to refresh immediately. During focus, blocked pages show your next action. After expiry, reload or follow **Open site** to return to the site.
 
 Pairing uses an authenticated loopback connection. The desktop app shares the active session's end time, domain list, and the next task title. An already received session remains usable if the desktop app closes.
+
+Each paired profile reports back the days it was running and a daily count of blocked visits per domain. It sends no URLs, page content or browsing history. **Settings → Pair Chrome** lists each profile as covered or unavailable, and **Review** shows blocked attempts by site, marks days with no report, and compares with the previous week only when both weeks are fully covered. Name a profile in the extension popup so you can tell profiles apart.
 
 ## Reminders and sync
 

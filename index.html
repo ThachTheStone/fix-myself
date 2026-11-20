@@ -244,7 +244,10 @@
       </section>
       <section class="tasks-section" aria-labelledby="distraction-label">
         <h2 id="distraction-label">Distractions</h2>
-        <p class="muted">Blocked Chrome attempts and Android usage minutes are not reported yet. They will appear here once usage reporting is connected.</p>
+        <p id="distraction-summary" class="muted"></p>
+        <ul id="distraction-list" class="task-list"></ul>
+        <p id="distraction-gaps" class="muted" hidden></p>
+        <p class="muted">Android usage minutes are not reported yet.</p>
       </section>
       <section class="tasks-section" aria-labelledby="workout-label">
         <h2 id="workout-label">Workouts</h2>
@@ -273,6 +276,8 @@
         <div id="windows-settings" hidden>
           <label class="check-label"><input name="startup" type="checkbox"> Open Today when I sign in to Windows</label>
           <label class="check-label"><input name="automatic" type="checkbox"> Start focus on the first sign-in each day</label>
+          <label class="check-label"><input name="keepRunning" type="checkbox"> Keep running in the notification area when I close the window</label>
+          <p class="muted">Reminders and Chrome blocking need Fix Myself to be running. Quit from the notification area icon.</p>
         </div>
         <div id="browser-settings" hidden>
           <label for="focus-domains">Chrome domains to block</label>
@@ -340,6 +345,9 @@
         <input type="password" id="pairing-code" readonly>
         <button type="button" class="button secondary" id="copy-pairing">Copy code</button>
         <p id="pairing-feedback" class="feedback" role="status"></p>
+        <h3>Chrome coverage</h3>
+        <ul id="coverage-list" class="compact-list"></ul>
+        <p id="coverage-empty" class="muted">No Chrome profile has checked in yet. Install and pair the extension in each profile you use.</p>
       </section>
 
       <section class="panel settings-panel" aria-labelledby="data-title">

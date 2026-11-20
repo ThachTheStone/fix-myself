@@ -5,7 +5,7 @@ import {
   focusSnapshot, inboxTasks, localDate, markDelivered, mergeSync, normalizeDomains, onLogin,
   parseLeadTimes, pendingDelivery, readState, resolveConflict, saveState, saveTask, saveWorkout,
   setNextAction, snoozeReminder, startFocus, STORAGE_KEY, todayTasks, todayView, toggleTask,
-  updateSettings, weekRange, workoutLabel
+  updateSettings, weekRange, workoutLabel, recordChromeReports, distractionReview, chromeCoverage
 } from '../app/model.js';
 
 function makeStorage(initial = null) {
@@ -266,4 +266,33 @@ test('workouts sync without their photo', () => {
   assert.equal(JSON.stringify(payload).includes('local-photo'), false);
   const phone = mergeSync(fresh(), payload, ctx('2026-11-19T08:02:00Z', 'phone')).state;
   assert.equal(workoutLabel(phone.workouts[0]), 'Photo on another device');
+});
+
+test('REV-03: blocked attempts by site show gaps and compare only fully covered weeks', () => {
+  let state = fresh();
+  const profileId = '00000000-0000-4000-8000-000000000001';
+  const activeDays = [];
+  for (let day = '2026-11-09'; day <= '2026-11-18'; day = new Date(Date.parse(day) + 86_400_000).toISOString().slice(0, 10)) {
+    activeDays.push(day);
+  }
+  state = recordChromeReports(state, [{
+    profileId, profileName: 'Work', receivedAt: Date.parse('2026-11-18T10:00:00Z'), activeDays,
+    attempts: { '2026-11-10': { 'youtube.com': 4 }, '2026-11-17': { 'youtube.com': 2, 'facebook.com': 1 } }
+  }]);
+  // Monday 16th to Wednesday 18th: covered in both weeks, so the totals compare.
+  let review = distractionReview(state, '2026-11-16', '2026-11-22', '2026-11-18');
+  assert.equal(review.comparable, true);
+  assert.equal(review.total, 3);
+  assert.equal(review.previousTotal, 4);
+  assert.deepEqual(review.bySite[0], { domain: 'youtube.com', count: 2, previous: 4 });
+  // Thursday has no report yet, so it is a gap and the comparison is withheld.
+  review = distractionReview(state, '2026-11-16', '2026-11-22', '2026-11-19');
+  assert.deepEqual(review.gaps, ['2026-11-19']);
+  assert.equal(review.comparable, false);
+  assert.equal(review.previousTotal, null);
+
+  const coverage = chromeCoverage(state, Date.parse('2026-11-18T10:01:00Z'));
+  assert.deepEqual(coverage.map(({ name, current }) => [name, current]), [['Work', true]]);
+  assert.equal(chromeCoverage(state, Date.parse('2026-11-18T11:00:00Z'))[0].current, false);
+  assert.equal(JSON.stringify(exportSync(state, { id: 'pc', name: 'PC' })).includes('youtube.com'), false);
 });

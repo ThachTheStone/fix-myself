@@ -14,6 +14,7 @@ Xem [README.md](../README.md) để cài môi trường. Chọn kiểm tra theo 
 |---|---|
 | Logic planner hoặc API cục bộ | `npm test` |
 | Giao diện và bản build dùng chung | `npm run build`. Dùng `npm run dev` để xem luồng giao diện. |
+| Desktop | Trong terminal của VS Code, xóa biến `ELECTRON_RUN_AS_NODE` trước khi chạy `npm run desktop` hoặc kiểm thử Electron, nếu không Electron chạy như Node và không mở cửa sổ. |
 | Chrome và focus | `npm run build` rồi `npm run test:browser`. Cài Playwright Chromium theo README và đóng app desktop trước khi chạy vì test dùng cùng cổng ghép nối. |
 | Windows sau khi đăng nhập | Trên Windows 11, bật hai tùy chọn khởi chạy và focus tự động. Kiểm tra lần đăng nhập đầu ngày, lần đăng nhập lại cùng ngày, và mốc hết hạn trong Chrome. Tham chiếu A-01 và A-02. |
 | Android | `npm run android:sync`, rồi chạy `./gradlew assembleDebug` trong `android/`. Dùng `gradlew.bat assembleDebug` trên Windows. Ghi model, phiên bản hệ điều hành và kết quả nếu có kiểm tra trên POCO. Tham chiếu A-03 cho quyền, Battery Saver và khởi động lại. |

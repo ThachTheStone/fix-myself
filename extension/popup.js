@@ -34,4 +34,11 @@ form.addEventListener('submit', (event) => {
 });
 
 refresh.addEventListener('click', () => send({ type: 'sync' }));
+const nameForm = document.getElementById('name-form');
+const nameInput = document.getElementById('profile-name');
+chrome.storage.local.get('profileName').then(({ profileName }) => { nameInput.value = profileName ?? ''; });
+nameForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  send({ type: 'name', name: nameInput.value });
+});
 send({ type: 'sync' });

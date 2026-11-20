@@ -47,6 +47,7 @@ export async function showNow(title, body) {
   if ((await permissionState()) !== 'granted') return false;
   const notification = new Notification(title, { body, tag: 'fix-myself-' + numericId(title + body) });
   notification.addEventListener('click', () => {
+    globalThis.fixMyselfDesktop?.show?.();
     globalThis.focus?.();
     location.hash = '#today';
   });

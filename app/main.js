@@ -1,5 +1,5 @@
 import {
-  addToToday, captureTask, DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
+  addToToday, captureTask, chromeCoverage, distractionReview, recordChromeReports, DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isFocused, markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, pendingDelivery, planningDay, readState, reconcileReminders,
   registerDevice, remindsOn, reminderText, resolveConflict, REVIEW_LABELS, saveState, saveTask, saveWorkout,
@@ -158,8 +158,11 @@ function renderTimer(now = Date.now()) {
   const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   element('focus-time').textContent = remaining;
   element('start-focus').hidden = active;
+  const covered = chromeCoverage(state, now).filter((profile) => profile.current).length;
+  const coverage = covered === 0 ? 'No Chrome profile has checked in recently.'
+    : covered === 1 ? 'Blocking in 1 Chrome profile.' : `Blocking in ${covered} Chrome profiles.`;
   const status = active
-    ? desktop ? 'Focus in progress. Paired Chrome profiles follow this session.' : 'Focus timer is running on this device.'
+    ? desktop ? 'Focus in progress. ' + coverage : 'Focus timer is running on this device.'
     : desktop ? '' : 'Timer only on this device.';
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
   if (previousFocusStatus !== active) {
@@ -466,6 +469,7 @@ function renderReview() {
   });
   renderTasks('missed-list', review.carryovers);
   renderTasks('undated-list', review.undated);
+  renderDistractions(end);
 
   const workouts = state.workouts.filter((workout) => workout.date >= reviewStart && workout.date <= end)
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -486,6 +490,44 @@ function renderReview() {
         }
       }));
   }));
+}
+
+function renderDistractions(end) {
+  const review = distractionReview(state, reviewStart, end, currentDay);
+  const summary = element('distraction-summary');
+  if (!review.connected) {
+    summary.textContent = 'Blocked Chrome attempts appear here after the Fix Myself Focus extension is paired.';
+  } else if (!review.days.length) {
+    summary.textContent = 'This period has not started yet.';
+  } else {
+    summary.textContent = `${review.total} blocked attempt${review.total === 1 ? '' : 's'} in Chrome`
+      + (review.comparable
+        ? `, compared with ${review.previousTotal} on the same days last week.`
+        : '. Week-over-week comparison needs full coverage in both weeks.');
+  }
+  element('distraction-list').replaceChildren(...review.bySite.map((site) => h('li', { class: 'task' },
+    h('div', { class: 'task-detail' },
+      h('p', { class: 'task-title', text: site.domain }),
+      h('p', { class: 'task-meta', text: `${site.count} blocked` + (site.previous === null ? '' : ` · ${site.previous} last week`) })))));
+  const gaps = element('distraction-gaps');
+  gaps.hidden = !review.connected || review.gaps.length === 0;
+  gaps.textContent = 'No Chrome report for ' + review.gaps.map(formatDay).join(', ') + '. Attempts on those days may be missing.';
+}
+
+async function pullChromeReports() {
+  if (!desktop?.chromeReports) return;
+  const next = recordChromeReports(state, await desktop.chromeReports());
+  if (next !== state) applyState(next);
+}
+
+function renderCoverage() {
+  const coverage = chromeCoverage(state);
+  element('coverage-empty').hidden = coverage.length > 0;
+  element('coverage-list').replaceChildren(...coverage.map((profile) => h('li', {},
+    h('p', { class: 'strong', text: profile.name }),
+    h('p', { class: 'muted', text: profile.current
+      ? 'Covered. Checked in ' + formatTime(profile.lastSeenAt) + '.'
+      : 'Unavailable since ' + formatTime(profile.lastSeenAt) + '. Chrome may be closed, or the extension may be disabled or unpaired.' }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +616,7 @@ async function refreshPreferences() {
   preferences.elements.duration.value = focusMinutes;
   preferences.elements.domains.value = domains.join('\n');
   preferences.elements.automatic.checked = focusAtLogin;
+  preferences.elements.keepRunning.checked = state.preferences.keepRunning;
   const zoneSelect = planningForm.elements.timeZone;
   if (!zoneSelect.options.length) zoneSelect.replaceChildren(...timeZones().map((zone) => h('option', { value: zone, text: zone.replaceAll('_', ' ') })));
   zoneSelect.value = state.settings.timeZone ?? '';
@@ -648,6 +691,7 @@ function render() {
   if (currentView === 'task') renderDetail(false);
   if (currentView === 'review') renderReview();
   renderSettingsLists();
+  renderCoverage();
   renderTimer(now.getTime());
   syncChrome();
   scheduleReminders(now);
@@ -677,6 +721,7 @@ function navigate() {
   }
   if (view === 'review') renderReview();
   if (view === 'settings') refreshPreferences();
+  if (view === 'review' || view === 'settings') pullChromeReports().catch(reportError);
 }
 
 function showTask() {
@@ -820,15 +865,23 @@ function wireSettings() {
   preferences.addEventListener('submit', async (event) => {
     event.preventDefault();
     const feedback = element('settings-feedback');
-    const { duration, startup, automatic, domains } = preferences.elements;
+    const { duration, startup, automatic, domains, keepRunning } = preferences.elements;
     const submit = preferences.querySelector('button[type="submit"]');
     submit.disabled = true;
     try {
       const hosts = desktop ? normalizeDomains(domains.value) : [...DEFAULT_DOMAINS];
-      if (desktop?.platform === 'win32') await desktop.setStartup(startup.checked);
+      if (desktop?.platform === 'win32') {
+        await desktop.setStartup(startup.checked);
+        await desktop.setBackground(keepRunning.checked);
+      }
       applyState({
         ...state,
-        preferences: { focusMinutes: Number(duration.value), focusAtLogin: startup.checked && automatic.checked, domains: hosts }
+        preferences: {
+          focusMinutes: Number(duration.value),
+          focusAtLogin: startup.checked && automatic.checked,
+          domains: hosts,
+          keepRunning: keepRunning.checked
+        }
       });
       automatic.checked = state.preferences.focusAtLogin;
       feedback.textContent = 'Settings saved.';
@@ -930,6 +983,7 @@ async function boot() {
   if (desktop?.platform === 'win32') element('windows-settings').hidden = false;
   if (desktop) element('browser-settings').hidden = false;
   if (desktop?.loginLaunch) state = onLogin(state);
+  desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
   saveState(localStorage, state);
   currentDay = planningDay(state);
 
@@ -952,6 +1006,7 @@ async function boot() {
     if (planningDay(state) !== currentDay) render();
     else renderTimer();
     if (tick % 15 === 0) checkReminders();
+    if (tick % 30 === 0) pullChromeReports().catch(reportError);
   }, 1000);
 }
 

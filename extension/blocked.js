@@ -52,4 +52,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 ({ focus: current } = await chrome.storage.local.get('focus'));
+// Count a blocked visit, but not a reload or a tab that was open when focus began.
+const navigation = performance.getEntriesByType('navigation')[0];
+if (active() && new URLSearchParams(location.search).get('from') !== 'start' && navigation?.type !== 'reload') {
+  chrome.runtime.sendMessage({ type: 'attempt', host }).catch(() => {});
+}
 render();

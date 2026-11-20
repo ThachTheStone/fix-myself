@@ -54,7 +54,8 @@ function defaultState() {
     reminders: {},
     conflicts: [],
     peers: {},
-    preferences: { focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS] }
+    chrome: { profiles: {} },
+    preferences: { focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS], keepRunning: true }
   };
 }
 
@@ -126,7 +127,13 @@ export function migrateState(saved) {
     };
   }
   if (saved?.version === STATE_VERSION && Array.isArray(saved.tasks) && saved.preferences) {
-    return { ...defaultState(), ...saved, settings: { ...defaultSettings(), ...saved.settings } };
+    const defaults = defaultState();
+    return {
+      ...defaults,
+      ...saved,
+      settings: { ...defaults.settings, ...saved.settings },
+      preferences: { ...defaults.preferences, ...saved.preferences }
+    };
   }
   throw new Error('This version cannot open the saved plan.');
 }
@@ -923,4 +930,83 @@ export function workoutLabel(workout) {
   if (workout.photoId) return 'Photo attached';
   if (workout.hasPhoto) return 'Photo on another device';
   return 'Self-reported';
+}
+
+// ---------------------------------------------------------------------------
+// Chrome coverage and blocked attempts (FOC-05, REV-03). Reports hold only
+// daily totals per domain and the days each Chrome profile was running. They
+// stay on this device and are not part of sync files.
+
+export const COVERAGE_STALE_MS = 2 * 60_000;
+
+export function recordChromeReports(state, reports) {
+  if (!reports?.length) return state;
+  const profiles = { ...state.chrome?.profiles };
+  let changed = false;
+  for (const report of reports) {
+    const old = profiles[report.profileId];
+    const lastSeenAt = new Date(report.receivedAt).toISOString();
+    if (old && old.lastSeenAt >= lastSeenAt) continue;
+    profiles[report.profileId] = {
+      name: report.profileName,
+      lastSeenAt,
+      // Each report carries the profile's cumulative totals for recent days.
+      attempts: { ...old?.attempts, ...report.attempts },
+      activeDays: [...new Set([...(old?.activeDays ?? []), ...report.activeDays])].sort().slice(-120)
+    };
+    changed = true;
+  }
+  return changed ? { ...state, chrome: { profiles } } : state;
+}
+
+export function chromeCoverage(state, now = Date.now()) {
+  return Object.entries(state.chrome?.profiles ?? {}).map(([id, profile]) => ({
+    id,
+    name: profile.name,
+    lastSeenAt: profile.lastSeenAt,
+    current: now - new Date(profile.lastSeenAt).getTime() <= COVERAGE_STALE_MS
+  })).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+}
+
+function attemptsBetween(profiles, days) {
+  const totals = {};
+  for (const profile of profiles) {
+    for (const day of days) {
+      for (const [domain, count] of Object.entries(profile.attempts?.[day] ?? {})) {
+        totals[domain] = (totals[domain] ?? 0) + count;
+      }
+    }
+  }
+  return totals;
+}
+
+// Blocked attempts by site for [startDay, endDay], limited to days that have
+// passed. Days with no reporting Chrome profile are gaps. The previous week is
+// compared only when both periods are fully covered.
+export function distractionReview(state, startDay, endDay, today) {
+  const profiles = Object.values(state.chrome?.profiles ?? {});
+  const days = [];
+  for (let day = startDay; day <= endDay && day <= today; day = addDays(day, 1)) days.push(day);
+  const previousDays = days.map((day) => addDays(day, -7));
+  const covered = new Set(profiles.flatMap((profile) => profile.activeDays ?? []));
+  const gaps = days.filter((day) => !covered.has(day));
+  const previousGaps = previousDays.filter((day) => !covered.has(day));
+  const current = attemptsBetween(profiles, days);
+  const previous = attemptsBetween(profiles, previousDays);
+  const comparable = profiles.length > 0 && days.length > 0 && gaps.length === 0 && previousGaps.length === 0;
+  const bySite = Object.keys({ ...current, ...(comparable ? previous : {}) }).map((domain) => ({
+    domain,
+    count: current[domain] ?? 0,
+    previous: comparable ? previous[domain] ?? 0 : null
+  })).sort((a, b) => b.count - a.count || a.domain.localeCompare(b.domain));
+  const sum = (totals) => Object.values(totals).reduce((total, count) => total + count, 0);
+  return {
+    connected: profiles.length > 0,
+    days,
+    gaps,
+    comparable,
+    bySite,
+    total: sum(current),
+    previousTotal: comparable ? sum(previous) : null
+  };
 }
