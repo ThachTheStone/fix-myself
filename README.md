@@ -7,6 +7,7 @@ A local-first planner and focus timer for Windows 11 and Android. Set a mission,
 - [Agent guide](AGENTS.md)
 - [Current architecture and proposed stack](docs/ARCHITECTURE.md)
 - [Development and handoff workflow](docs/WORKFLOW.md)
+- [Device acceptance checklist](docs/ACCEPTANCE.md)
 
 ## Run the planner
 

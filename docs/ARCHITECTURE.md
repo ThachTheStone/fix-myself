@@ -52,6 +52,6 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | Đồng bộ và tích hợp | ASP.NET Core và PostgreSQL là phương án khi bắt đầu đồng bộ nhiều thiết bị. Dịch vụ nên nhận và trả đúng payload `fix-myself-sync` hiện tại để dùng lại `mergeSync`. GitHub Issues, Google Calendar và AI vẫn thuộc các giai đoạn triển khai trong SRS. |
 | iPhone | SwiftUI và Screen Time API là hướng đánh giá sau. |
 
-Mốc Windows đầu tiên cần chứng minh người dùng đăng nhập, thấy Today, mở trang đã chọn và thấy việc tiếp theo trong Chrome. Kiểm tra cả trường hợp Chrome đã mở sẵn, desktop mất kết nối, và phiên hết hạn. Đối chiếu A-01 và A-02 trong [SRS.md](../SRS.md).
+Mốc Windows đầu tiên cần chứng minh người dùng đăng nhập, thấy Today, mở trang đã chọn và thấy việc tiếp theo trong Chrome. Kiểm tra cả trường hợp Chrome đã mở sẵn, desktop mất kết nối, và phiên hết hạn. Đối chiếu A-01 và A-02 trong [SRS.md](../SRS.md) và ghi kết quả vào [bảng nghiệm thu](ACCEPTANCE.md).
 
 Ở commit nền `f706f9e`, bài kiểm tra Node và Chromium đã chạy đạt, cùng kiểm tra nhanh Electron, build Windows bằng `npm run desktop:package` (trình cài NSIS) và Android debug APK. Nghiệm thu sau khi đăng nhập trên Windows 11 và kiểm tra Android app blocking trên máy POCO vẫn là các mốc xác minh thiết bị thật theo A-01 đến A-03.
