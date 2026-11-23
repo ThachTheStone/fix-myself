@@ -69,7 +69,7 @@ watched() {
   if command -v powershell.exe >/dev/null; then
     powershell.exe -NoProfile -NonInteractive -Command \
       "Get-Process -Name electron,'Fix Myself',chrome,Code -ErrorAction SilentlyContinue | ForEach-Object { \$_.Id.ToString() + ' ' + \$_.ProcessName }" \
-      2>/dev/null | tr -d '\r' | sort
+      2>/dev/null | tr -d '\r' | sort || true
   fi
 }
 before_procs=$(watched)
