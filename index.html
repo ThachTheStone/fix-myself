@@ -43,6 +43,7 @@
         <section class="focus panel" aria-labelledby="focus-label">
           <div class="focus-heading"><h2 class="eyebrow" id="focus-label" data-i18n="today.focusTitle">Focus session</h2><span class="focus-dot" aria-hidden="true"></span></div>
           <p class="focus-time" id="focus-time"></p>
+          <select id="focus-preset" data-i18n-aria-label="apps.todayLabel" aria-label="Apps for this session" hidden></select>
           <button type="button" class="button focus-button" id="start-focus" data-i18n="today.startFocus">Start focus</button>
           <p id="focus-status" class="focus-status" role="status"></p>
         </section>
@@ -350,6 +351,51 @@
         <h3 data-i18n="rules.pending">Waiting to apply</h3>
         <ul id="pending-rule-list" class="compact-list"></ul>
         <p id="pending-rules-empty" class="muted" data-i18n="rules.pendingEmpty">Nothing is waiting.</p>
+      </section>
+
+      <section class="panel settings-panel" id="app-presets" aria-labelledby="presets-title" hidden>
+        <h2 id="presets-title" data-i18n="apps.title">App presets</h2>
+        <p class="muted" data-i18n="apps.help">Presets remember the Windows apps a focus session allows, so you can start a session with only the apps your work needs. Enforcement from presets is not built yet: the session records the choice for later.</p>
+        <ul id="preset-list" class="compact-list"></ul>
+        <p id="preset-empty" class="muted" data-i18n="apps.empty">No presets yet. Add one to prepare a focus session with only the apps you need.</p>
+        <form id="preset-form" class="rule-form">
+          <h3 id="preset-form-title" data-i18n="apps.newPreset">New preset</h3>
+          <input type="hidden" id="preset-id" name="id">
+          <label for="preset-name" data-i18n="apps.name">Preset name</label>
+          <input id="preset-name" name="name" maxlength="60" autocomplete="off">
+          <h4 data-i18n="apps.chosen">Apps in this preset</h4>
+          <ul id="preset-apps" class="compact-list"></ul>
+          <p id="preset-apps-empty" class="muted" data-i18n="apps.noApps">No apps chosen yet.</p>
+          <label for="preset-open-apps" data-i18n="apps.openApps">Apps with an open window</label>
+          <div class="inline-fields">
+            <select id="preset-open-apps"></select>
+            <button type="button" class="button secondary" id="preset-refresh" data-i18n="apps.refresh">Refresh open apps</button>
+          </div>
+          <button type="button" class="button secondary" id="preset-add-app" data-i18n="apps.addApp">Add app</button>
+          <label for="preset-strength" data-i18n="apps.strength">When a listed app comes to the front</label>
+          <select id="preset-strength" name="strength">
+            <option value="block" data-i18n="apps.strengthBlock">Block it</option>
+            <option value="pause" data-i18n="apps.strengthPause">Pause, then allow a pass</option>
+          </select>
+          <div class="field-row" id="preset-pause-fields" hidden>
+            <div>
+              <label for="preset-countdown" data-i18n="apps.countdown">Countdown (seconds)</label>
+              <input id="preset-countdown" name="countdownSeconds" type="number" inputmode="numeric" min="5" max="60" value="15">
+            </div>
+            <div>
+              <label for="preset-pass" data-i18n="apps.pass">Pass (minutes)</label>
+              <input id="preset-pass" name="passMinutes" type="number" inputmode="numeric" min="1" max="30" value="10">
+            </div>
+          </div>
+          <div class="button-group">
+            <button type="submit" class="button primary" data-i18n="apps.save">Save preset</button>
+            <button type="button" class="button secondary" id="preset-cancel" hidden data-i18n="apps.cancelEdit">Cancel edit</button>
+          </div>
+          <p id="preset-feedback" class="feedback" role="status"></p>
+        </form>
+        <label for="auto-preset" data-i18n="apps.auto">Preset for automatic sessions</label>
+        <select id="auto-preset"></select>
+        <p id="preset-auto-feedback" class="feedback" role="status"></p>
       </section>
 
       <form id="planning-form" class="panel settings-panel">
