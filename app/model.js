@@ -1373,6 +1373,10 @@ export function recordChromeReports(state, reports) {
       lastSeenAt,
       // Each report carries the profile's cumulative totals for recent days.
       attempts: { ...old?.attempts, ...report.attempts },
+      // Block rule activity is also cumulative per day, so a newer report
+      // replaces the same day and keeps the older ones (BLK-10).
+      ruleEvents: { ...old?.ruleEvents, ...(report.ruleEvents ?? {}) },
+      passReasons: { ...old?.passReasons, ...(report.passReasons ?? {}) },
       activeDays: [...new Set([...(old?.activeDays ?? []), ...report.activeDays])].sort().slice(-120)
     };
     changed = true;
@@ -1399,6 +1403,41 @@ function attemptsBetween(profiles, days) {
     }
   }
   return totals;
+}
+
+// Block rule activity for [startDay, endDay], limited to days that have passed
+// (BLK-10). A visit is counted when a Block rule stops it, when a Pause rule
+// pauses it, and when the user takes a pass; pass reasons stay on this device.
+export function ruleReview(state, startDay, endDay, today) {
+  const profiles = Object.values(state.chrome?.profiles ?? {});
+  const days = [];
+  for (let day = startDay; day <= endDay && day <= today; day = addDays(day, 1)) days.push(day);
+  const sites = new Map();
+  const reasons = [];
+  for (const profile of profiles) {
+    for (const day of days) {
+      for (const [domain, kinds] of Object.entries(profile.ruleEvents?.[day] ?? {})) {
+        const site = sites.get(domain)
+          ?? { domain, block: 0, pause: 0, pass: 0, hours: new Array(24).fill(0) };
+        for (const kind of ['block', 'pause', 'pass']) {
+          for (const [hour, count] of Object.entries(kinds[kind] ?? {})) {
+            site[kind] += count;
+            site.hours[Number(hour)] += count;
+          }
+        }
+        sites.set(domain, site);
+      }
+      for (const entry of profile.passReasons?.[day] ?? []) {
+        reasons.push({ day, domain: entry.host, hour: entry.hour, reason: entry.reason });
+      }
+    }
+  }
+  const bySite = [...sites.values()]
+    .filter((site) => site.block + site.pause + site.pass > 0)
+    .sort((a, b) => (b.block + b.pause + b.pass) - (a.block + a.pause + a.pass)
+      || a.domain.localeCompare(b.domain));
+  reasons.sort((a, b) => b.day.localeCompare(a.day) || b.hour - a.hour);
+  return { connected: profiles.length > 0, days, bySite, reasons };
 }
 
 // Blocked attempts by site for [startDay, endDay], limited to days that have

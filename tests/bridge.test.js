@@ -96,8 +96,77 @@ test('profiles report only validated daily totals', async (t) => {
   assert.equal((await fetch(url, { method: 'POST', body: JSON.stringify(valid), headers: json })).status, 204);
   const withUrl = { ...valid, attempts: { '2026-11-19': { 'https://youtube.com/watch?v=1': 1 } } };
   assert.equal((await fetch(url, { method: 'POST', body: JSON.stringify(withUrl), headers: json })).status, 400);
-  assert.equal((await fetch(url, { method: 'POST', body: 'x'.repeat(20_000), headers: json }).catch(() => ({ status: 413 }))).status, 413);
+  assert.equal((await fetch(url, { method: 'POST', body: 'x'.repeat(70_000), headers: json }).catch(() => ({ status: 413 }))).status, 413);
   assert.equal(reports.length, 1);
   assert.deepEqual(reports[0].attempts, valid.attempts);
   assert.equal(reports[0].profileName, 'Work');
+});
+
+test('block rule activity is validated before the desktop app stores it (BLK-10)', async (t) => {
+  const reports = [];
+  const { base, headers } = await open(t, () => null, (report) => reports.push(report));
+  const json = { ...headers, 'Content-Type': 'application/json' };
+  const url = base + '/v1/report';
+  const baseReport = {
+    profileId: '00000000-0000-4000-8000-000000000001',
+    profileName: 'Work',
+    activeDays: ['2026-11-19'],
+    attempts: { '2026-11-19': { 'youtube.com': 3 } }
+  };
+  const ruleEvents = {
+    '2026-11-19': { 'youtube.com': { block: { '9': 2, '21': 3 }, pause: { '21': 1 }, pass: { '21': 1 } } }
+  };
+  const passReasons = { '2026-11-19': [{ host: 'youtube.com', hour: 21, reason: 'Watching a lecture' }] };
+  assert.deepEqual(bridge.validReport({ ...baseReport, ruleEvents, passReasons }),
+    { ...baseReport, ruleEvents, passReasons });
+  // An older extension that does not report block rule activity still passes.
+  assert.deepEqual(bridge.validReport(baseReport).ruleEvents, {});
+  assert.deepEqual(bridge.validReport(baseReport).passReasons, {});
+
+  const days = (count) => Array.from({ length: count }, (_, index) =>
+    new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10));
+  const day = (value) => ({ '2026-11-19': value });
+  const site = (kinds) => ({ 'youtube.com': kinds });
+  const hosts = (count) => Object.fromEntries(Array.from({ length: count }, (_, index) =>
+    [`site-${index}.example.com`, { block: { 9: 1 } }]));
+  const invalid = (fields) => bridge.validReport({ ...baseReport, ...fields });
+  const reason = { host: 'youtube.com', hour: 21, reason: 'Checking a course' };
+
+  assert.equal(invalid({ ruleEvents: Object.fromEntries(days(41).map((date) => [date, {}])) }), null);
+  assert.equal(invalid({ ruleEvents: { '19-11-2026': site({ block: { 9: 1 } }) } }), null);
+  assert.equal(invalid({ ruleEvents: day(hosts(101)) }), null);
+  assert.equal(invalid({ ruleEvents: day({ 'https://youtube.com/watch': { block: { 9: 1 } } }) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ focus: { 9: 1 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { 24: 1 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { '09': 1 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { 9: 1.5 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { 9: -1 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { 9: 100_001 } })) }), null);
+  assert.equal(invalid({ ruleEvents: day(site({ block: { 9: '1' } })) }), null);
+  assert.equal(invalid({ passReasons: day(Array.from({ length: 21 }, () => reason)) }), null);
+  assert.equal(invalid({ passReasons: { '19-11-2026': [reason] } }), null);
+  assert.equal(invalid({ passReasons: day([{ ...reason, host: 'https://youtube.com' }]) }), null);
+  assert.equal(invalid({ passReasons: day([{ ...reason, hour: 24 }]) }), null);
+  assert.equal(invalid({ passReasons: day([{ ...reason, hour: '21' }]) }), null);
+  assert.equal(invalid({ passReasons: day([{ ...reason, reason: '' }]) }), null);
+  assert.equal(invalid({ passReasons: day([{ ...reason, reason: 'x'.repeat(201) }]) }), null);
+
+  // The cap was raised for this data, so a large but valid report still fits.
+  const bigEvents = Object.fromEntries(days(10).map((date) => [date, Object.fromEntries(
+    Array.from({ length: 40 }, (_, index) => [`site-${index}.example.com`, {
+      block: { 9: 1, 10: 2, 11: 3, 21: 4 },
+      pause: { 9: 1, 10: 2, 11: 3, 21: 4 },
+      pass: { 9: 1, 10: 2, 11: 3, 21: 4 }
+    }])
+  )]));
+  const big = JSON.stringify({ ...baseReport, ruleEvents: bigEvents });
+  assert.ok(big.length > 16_384 && big.length < bridge.MAX_REPORT_BYTES, `report size ${big.length}`);
+  assert.equal((await fetch(url, { method: 'POST', body: big, headers: json })).status, 204);
+  assert.equal(reports.at(-1).ruleEvents['2026-01-01']['site-0.example.com'].block['21'], 4);
+  // A whole report that breaks a rule is refused, so nothing partial is stored.
+  assert.equal((await fetch(url, {
+    method: 'POST',
+    body: JSON.stringify({ ...baseReport, passReasons: day([{ ...reason, hour: 24 }]) }),
+    headers: json
+  })).status, 400);
 });
