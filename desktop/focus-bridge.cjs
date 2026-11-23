@@ -2,20 +2,75 @@ const { timingSafeEqual } = require('node:crypto');
 const { createServer } = require('node:http');
 
 const PORT = 42631;
-const MAX_REPORT_BYTES = 16_384;
+const MAX_REPORT_BYTES = 65_536;
 const MAX_PLAN_BYTES = 16_384;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DOMAIN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const PROFILE = /^[a-f0-9-]{36}$/;
 const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const MAX_REPORT_DAYS = 40;
+const MAX_REPORT_HOSTS = 100;
+const MAX_PASS_REASONS = 20;
+const MAX_REASON_LENGTH = 200;
+const RULE_KINDS = ['block', 'pause', 'pass'];
+const HOURS = new Set(Array.from({ length: 24 }, (_, hour) => String(hour)));
 const MAX_RULES = 20;
 const MAX_RULE_DOMAINS = 30;
 const MAX_RULE_WINDOWS = 10;
 const CHANGE_DELAYS = [0, 10, 60, 'next-day'];
 const EMPTY_PLAN = { rules: [], pendingChanges: [], timeZone: null, mission: '', nextAction: '' };
 
-// A Chrome profile reports only daily blocked-attempt totals per domain and the
-// days it was running, so the desktop app can show coverage and trends.
+// Block rule activity for the weekly review (BLK-10): daily counts per site and
+// hour, plus the reasons entered for passes. No URLs or page content.
+function validRuleEvents(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > MAX_REPORT_DAYS) return null;
+  const clean = {};
+  for (const [day, hosts] of Object.entries(value)) {
+    if (!DAY.test(day)) return null;
+    if (!hosts || typeof hosts !== 'object' || Array.isArray(hosts)
+      || Object.keys(hosts).length > MAX_REPORT_HOSTS) return null;
+    clean[day] = {};
+    for (const [host, kinds] of Object.entries(hosts)) {
+      if (!DOMAIN.test(host) || !kinds || typeof kinds !== 'object' || Array.isArray(kinds)) return null;
+      clean[day][host] = {};
+      for (const [kind, hours] of Object.entries(kinds)) {
+        if (!RULE_KINDS.includes(kind) || !hours || typeof hours !== 'object' || Array.isArray(hours)) return null;
+        clean[day][host][kind] = {};
+        for (const [hour, count] of Object.entries(hours)) {
+          if (!HOURS.has(hour)) return null;
+          if (!Number.isSafeInteger(count) || count < 0 || count > 100_000) return null;
+          clean[day][host][kind][hour] = count;
+        }
+      }
+    }
+  }
+  return clean;
+}
+
+function validPassReasons(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > MAX_REPORT_DAYS) return null;
+  const clean = {};
+  for (const [day, list] of Object.entries(value)) {
+    if (!DAY.test(day) || !Array.isArray(list) || list.length > MAX_PASS_REASONS) return null;
+    clean[day] = list.map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      if (typeof entry.host !== 'string' || !DOMAIN.test(entry.host)) return null;
+      if (!Number.isInteger(entry.hour) || entry.hour < 0 || entry.hour > 23) return null;
+      if (typeof entry.reason !== 'string' || entry.reason.length < 1 || entry.reason.length > MAX_REASON_LENGTH) {
+        return null;
+      }
+      return { host: entry.host, hour: entry.hour, reason: entry.reason };
+    });
+    if (clean[day].some((entry) => entry === null)) return null;
+  }
+  return clean;
+}
+
+// A Chrome profile reports only daily blocked-attempt totals per domain, the
+// block rule activity for those days, and the days it was running, so the
+// desktop app can show coverage and trends.
 function validReport(report) {
   if (!report || typeof report !== 'object' || !PROFILE.test(report.profileId)) return null;
   const name = typeof report.profileName === 'string' ? report.profileName.trim().slice(0, 60) : '';
@@ -32,7 +87,17 @@ function validReport(report) {
       clean[day][domain] = count;
     }
   }
-  return { profileId: report.profileId, profileName: name || 'Chrome profile', attempts: clean, activeDays: [...activeDays] };
+  const ruleEvents = validRuleEvents(report.ruleEvents);
+  const passReasons = validPassReasons(report.passReasons);
+  if (!ruleEvents || !passReasons) return null;
+  return {
+    profileId: report.profileId,
+    profileName: name || 'Chrome profile',
+    attempts: clean,
+    activeDays: [...activeDays],
+    ruleEvents,
+    passReasons
+  };
 }
 
 function validSchedule(schedule) {
@@ -207,5 +272,6 @@ module.exports = {
   validSnapshot,
   EMPTY_PLAN,
   MAX_PLAN_BYTES,
+  MAX_REPORT_BYTES,
   PORT
 };

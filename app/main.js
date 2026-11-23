@@ -1,7 +1,7 @@
 import {
   activeBlockRules, addToToday, applyPendingRuleChanges, cancelPendingRuleChange, captureTask, chromeCoverage,
   CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteAppPreset, deleteBlockRule, distractionReview,
-  recordChromeReports,
+  recordChromeReports, ruleReview,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused,
   appLimitSnapshot, appReview, recordAppEvent,
@@ -531,6 +531,7 @@ function renderReview() {
   renderTasks('missed-list', review.carryovers);
   renderTasks('undated-list', review.undated);
   renderDistractions(end);
+  renderRuleReview(end);
   renderAppReview(end);
 
   const workouts = state.workouts.filter((workout) => workout.date >= reviewStart && workout.date <= end)
@@ -575,6 +576,38 @@ function renderDistractions(end) {
   const gaps = element('distraction-gaps');
   gaps.hidden = !review.connected || review.gaps.length === 0;
   gaps.textContent = t('review.gaps', { days: review.gaps.map(formatDay).join(', ') });
+}
+
+// Visits that Block and Pause rules stopped, and the reasons entered for
+// passes, kept apart from the focus attempt totals above (BLK-10).
+function renderRuleReview(end) {
+  const review = ruleReview(state, reviewStart, end, currentDay);
+  const clock = (hour) => String(hour).padStart(2, '0') + ':00';
+  element('rule-review-empty').hidden = review.bySite.length > 0;
+  element('rule-review-list').replaceChildren(...review.bySite.map((site) => {
+    const busiest = site.hours
+      .map((count, hour) => ({ hour, count }))
+      .filter((item) => item.count > 0)
+      .sort((a, b) => b.count - a.count || a.hour - b.hour)
+      .slice(0, 3)
+      .map((item) => `${clock(item.hour)} (${item.count})`)
+      .join(', ');
+    return h('li', { class: 'task' },
+      h('div', { class: 'task-detail' },
+        h('p', { class: 'task-title', text: site.domain }),
+        h('p', { class: 'task-meta', text: [
+          t('ruleReview.blocked', { n: site.block }),
+          t('ruleReview.paused', { n: site.pause }),
+          t('ruleReview.passes', { n: site.pass })
+        ].join(' · ') }),
+        h('p', { class: 'task-meta', text: t('ruleReview.busiest', { hours: busiest }) })));
+  }));
+  element('rule-reason-empty').hidden = review.reasons.length > 0;
+  element('rule-reason-list').replaceChildren(...review.reasons.map((reason) => h('li', { class: 'task' },
+    h('p', {
+      class: 'task-title',
+      text: `${formatDay(reason.day)}, ${clock(reason.hour)} · ${reason.domain}: ${reason.reason}`
+    }))));
 }
 
 async function pullChromeReports() {

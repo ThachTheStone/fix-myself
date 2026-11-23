@@ -231,6 +231,51 @@ test('a block rule is created in Settings, keeps a weaker edit waiting, and surv
   await page.locator('#pending-rules-empty').waitFor();
 });
 
+test('the Review page shows block rule activity and pass reasons apart from focus attempts (BLK-10)', { timeout: 30_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const url = `http://127.0.0.1:${app.httpServer.address().port}`;
+  const page = await (await launch(t)).newPage();
+  await page.goto(url);
+  const today = localDay(new Date());
+  // Build the state the extension would have reported, in the app's own shape.
+  await page.evaluate((day) => {
+    const key = 'fix-myself:v1';
+    const state = JSON.parse(localStorage.getItem(key));
+    state.chrome = {
+      profiles: {
+        '00000000-0000-4000-8000-000000000001': {
+          name: 'Work',
+          lastSeenAt: new Date().toISOString(),
+          activeDays: [day],
+          attempts: {},
+          ruleEvents: {
+            [day]: {
+              'youtube.com': { block: { 21: 3, 9: 1 }, pause: { 21: 2 }, pass: { 21: 1 } },
+              'facebook.com': { block: { 8: 1 } }
+            }
+          },
+          passReasons: { [day]: [{ host: 'youtube.com', hour: 21, reason: 'Watching a lecture' }] }
+        }
+      }
+    };
+    localStorage.setItem(key, JSON.stringify(state));
+  }, today);
+  await page.goto(url + '/#review');
+  // A hash-only change keeps the running page and its stale state, so reload to read the seeded plan.
+  await page.reload();
+
+  await page.getByRole('heading', { name: 'Block rules' }).waitFor();
+  const list = page.locator('#rule-review-list');
+  await list.getByText('youtube.com', { exact: true }).waitFor();
+  await list.getByText('4 blocked · 2 paused · 1 pass').waitFor();
+  await list.getByText('Busiest hours: 21:00 (6), 09:00 (1)').waitFor();
+  await list.getByText('1 blocked · 0 paused · 0 passes').waitFor();
+  await page.locator('#rule-reason-list').getByText('Watching a lecture', { exact: false }).waitFor();
+  await page.locator('#rule-reason-list').getByText(':00 · youtube.com:', { exact: false }).waitFor();
+  await page.locator('#rule-review-empty').waitFor({ state: 'hidden' });
+});
+
 // Worker runs (scripts/dispatch-cline.sh) skip this test: it needs the fixed bridge port, which the user's desktop
 // app may hold, and a worker must never stop that app to free it.
 const workerRun = process.env.FIX_MYSELF_WORKER ? 'worker runs leave port 127.0.0.1:42631 to the desktop app' : false;

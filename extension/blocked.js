@@ -142,7 +142,8 @@ await load();
 // Count a blocked visit, but not a reload or a tab that was open when the
 // session or the rule started.
 const navigation = performance.getEntriesByType('navigation')[0];
-if (view?.mode === 'focus' && params.get('from') !== 'start' && navigation?.type !== 'reload') {
-  send({ type: 'attempt', host }).catch(() => {});
+if (params.get('from') !== 'start' && navigation?.type !== 'reload') {
+  if (view?.mode === 'focus') send({ type: 'attempt', host }).catch(() => {});
+  if (view?.mode === 'block' || view?.mode === 'pause') send({ type: 'rule-attempt', host }).catch(() => {});
 }
 render();

@@ -50,7 +50,7 @@ Each paired profile reports back the days it was running and a daily count of bl
 
 A weaker change — turning a rule off, removing sites, shortening a window, switching from Block to Pause, or a longer pass — waits for **Wait before a weaker change applies** (10 minutes by default, or up to the start of the next day). The saved rule keeps running, the edit shows under **Waiting to apply**, and **Cancel** drops it. Strengthening changes apply at once, and a longer wait applies immediately while a shorter one also waits.
 
-The extension evaluates the schedules itself on a 30-second alarm, so a rule still applies when the desktop app is closed or Chrome starts without it.
+The extension evaluates the schedules itself on a 30-second alarm, so a rule still applies when the desktop app is closed or Chrome starts without it. **Review** lists, per site, how many visits a rule blocked or paused and how many passes you took, with the busiest hours and the reasons you entered for passes. Those counts stay separate from focus-session attempts.
 
 ## App presets
 

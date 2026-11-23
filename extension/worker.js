@@ -171,8 +171,9 @@ function recentDays(list) {
 }
 
 async function profile() {
-  let { profileId, profileName, activeDays = [], attempts = {} } = await chrome.storage.local.get(
-    ['profileId', 'profileName', 'activeDays', 'attempts']);
+  let { profileId, profileName, activeDays = [], attempts = {}, ruleEvents = {}, passReasons = {} }
+    = await chrome.storage.local.get(
+      ['profileId', 'profileName', 'activeDays', 'attempts', 'ruleEvents', 'passReasons']);
   if (!profileId) {
     profileId = crypto.randomUUID();
     await chrome.storage.local.set({ profileId });
@@ -182,19 +183,29 @@ async function profile() {
     activeDays = recentDays([...activeDays, today]);
     await chrome.storage.local.set({ activeDays });
   }
-  return { profileId, profileName: profileName ?? '', activeDays, attempts };
+  return { profileId, profileName: profileName ?? '', activeDays, attempts, ruleEvents, passReasons };
 }
 
 // The desktop app receives the profile name, the blocked visit counts per
-// domain and the days Chrome was running.
+// domain, the block rule activity and the days Chrome was running. Only daily
+// counts and the reasons entered for passes leave the browser (BLK-10).
 async function report(token) {
-  const { profileId, profileName, activeDays, attempts } = await profile();
-  const keep = new Set(recentDays(Object.keys(attempts)));
-  const recent = Object.fromEntries(Object.entries(attempts).filter(([day]) => keep.has(day)));
+  const { profileId, profileName, activeDays, attempts, ruleEvents, passReasons } = await profile();
+  const keep = new Set(recentDays([
+    ...Object.keys(attempts), ...Object.keys(ruleEvents), ...Object.keys(passReasons)
+  ]));
+  const recent = (value) => Object.fromEntries(Object.entries(value).filter(([day]) => keep.has(day)));
   await fetch(desktopOrigin + '/v1/report', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ profileId, profileName, activeDays, attempts: recent }),
+    body: JSON.stringify({
+      profileId,
+      profileName,
+      activeDays,
+      attempts: recent(attempts),
+      ruleEvents: recent(ruleEvents),
+      passReasons: recent(passReasons)
+    }),
     cache: 'no-store',
     signal: AbortSignal.timeout(2500)
   });
@@ -208,6 +219,27 @@ async function recordAttempt(host) {
   const keep = new Set(recentDays([...Object.keys(attempts), today]));
   const next = Object.fromEntries(Object.entries({ ...attempts, [today]: day }).filter(([key]) => keep.has(key)));
   await chrome.storage.local.set({ attempts: next });
+}
+
+// Block rule activity for the weekly review (BLK-10): visits a Block rule
+// stopped, visits a Pause rule paused, passes taken, and the reasons entered.
+// A day keeps at most 20 reasons; new ones are dropped past that.
+async function recordRuleEvent(kind, host, reason) {
+  const { ruleEvents = {}, passReasons = {} } = await chrome.storage.local.get(['ruleEvents', 'passReasons']);
+  const today = localDay();
+  const hour = String(new Date().getHours());
+  const site = { ...ruleEvents[today]?.[host] };
+  const counts = { ...site[kind], [hour]: (site[kind]?.[hour] ?? 0) + 1 };
+  site[kind] = counts;
+  const events = { ...ruleEvents, [today]: { ...ruleEvents[today], [host]: site } };
+  const text = String(reason ?? '').trim().slice(0, 200);
+  const listed = passReasons[today] ?? [];
+  const reasons = kind === 'pass' && text && listed.length < 20
+    ? { ...passReasons, [today]: [...listed, { host, hour: Number(hour), reason: text }] }
+    : passReasons;
+  const keep = new Set(recentDays([...Object.keys(events), ...Object.keys(reasons)]));
+  const recent = (value) => Object.fromEntries(Object.entries(value).filter(([day]) => keep.has(day)));
+  await chrome.storage.local.set({ ruleEvents: recent(events), passReasons: recent(reasons) });
 }
 
 // Reads the desktop plan, keeps the last one when the app is closed, then
@@ -264,8 +296,16 @@ async function grantPass(ruleId, host, reason) {
     takenAt: now.toISOString()
   };
   await chrome.storage.local.set({ passes: [...kept, pass] });
+  await recordRuleEvent('pass', host, pass.reason);
   await refresh();
   return { pass, until: pass.until };
+}
+
+// Counts one visit stopped or paused by a block rule (BLK-10). The page asks once
+// per visit, never on a reload, and the worker re-checks which rule covers the site.
+async function recordRuleAttempt(host) {
+  const view = await describe(host);
+  if (view.mode === 'block' || view.mode === 'pause') await recordRuleEvent(view.mode, host);
 }
 
 // What the intervention page shows (BLK-03, BLK-04).
@@ -325,6 +365,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   let operation;
   if (message?.type === 'sync') operation = startup;
   if (message?.type === 'attempt' && typeof message.host === 'string') operation = () => recordAttempt(message.host);
+  if (message?.type === 'rule-attempt' && typeof message.host === 'string') operation = () => recordRuleAttempt(message.host);
   if (message?.type === 'intervention' && typeof message.host === 'string') operation = () => describe(message.host);
   if (message?.type === 'show') operation = () => showToday().then(() => null);
   if (message?.type === 'pass' && typeof message.ruleId === 'string' && typeof message.host === 'string') {
