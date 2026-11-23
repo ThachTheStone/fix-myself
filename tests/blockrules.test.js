@@ -38,6 +38,17 @@ const scheduled = (windows, overrides = {}) => validateBlockRule({
   ...overrides
 });
 
+const paused = (overrides = {}) => validateBlockRule({
+  id: 'paused',
+  name: 'Paused',
+  domains: ['youtube.com'],
+  strength: 'pause',
+  countdownSeconds: 20,
+  passMinutes: 5,
+  schedule: { type: 'always' },
+  ...overrides
+});
+
 // A UTC instant for a weekday (0 is Sunday) near May 2026.
 function weekday(dayOfWeek, time, base = '2026-05-03') {
   const [year, month, day] = base.split('-').map(Number);
@@ -181,6 +192,144 @@ test('classification tells stronger from weaker edits (BLK-06)', () => {
   const pause = { ...base, strength: 'pause', countdownSeconds: 20, passMinutes: 5 };
   assert.equal(classifyRuleChange(pause, { ...pause, passMinutes: 15 }), 'weaken');
   assert.equal(classifyRuleChange(pause, { ...pause, name: 'Other name' }), 'same');
+});
+
+test('each aspect of a rule is compared on its own (BLK-06)', () => {
+  const blockRule = scheduled([{ days: [1], start: '09:00', end: '10:00' }]);
+  const pauseRule = paused();
+
+  // enabled
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, enabled: false }), 'weaken');
+  assert.equal(classifyRuleChange({ ...blockRule, enabled: false }, blockRule), 'strengthen');
+  assert.equal(
+    classifyRuleChange({ ...blockRule, enabled: false }, { ...blockRule, enabled: false, name: 'Renamed' }),
+    'same',
+    'a disabled rule stays the same for any edit'
+  );
+  // strength
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, strength: 'pause' }), 'weaken');
+  assert.equal(classifyRuleChange(pauseRule, { ...pauseRule, strength: 'block' }), 'strengthen');
+  // domains
+  assert.equal(classifyRuleChange({ ...blockRule, domains: ['youtube.com', 'x.com'] }, blockRule), 'weaken');
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, domains: ['youtube.com', 'x.com'] }), 'strengthen');
+  // schedule
+  assert.equal(classifyRuleChange({ ...blockRule, schedule: { type: 'always' } }, blockRule), 'weaken');
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, schedule: { type: 'always' } }), 'strengthen');
+  // countdown, only while the rule pauses
+  assert.equal(classifyRuleChange(pauseRule, { ...pauseRule, countdownSeconds: 10 }), 'weaken');
+  assert.equal(classifyRuleChange(pauseRule, { ...pauseRule, countdownSeconds: 30 }), 'strengthen');
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, countdownSeconds: 30 }), 'same');
+  // pass length, only while the rule pauses
+  assert.equal(classifyRuleChange(pauseRule, { ...pauseRule, passMinutes: 15 }), 'weaken');
+  assert.equal(classifyRuleChange(pauseRule, { ...pauseRule, passMinutes: 1 }), 'strengthen');
+  assert.equal(classifyRuleChange(blockRule, { ...blockRule, passMinutes: 30 }), 'same');
+});
+
+test('a mixed edit that weakens any aspect waits for the change delay (BLK-06)', () => {
+  const start = '2026-05-04T08:00:00Z';
+  const base = scheduled([{ days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' }]);
+  const twoSites = { ...base, domains: ['youtube.com', 'x.com'] };
+
+  // Adding a site and shortening the time window.
+  const narrowed = scheduled(
+    [{ days: [1, 2, 3, 4, 5], start: '10:00', end: '12:00' }],
+    { domains: ['youtube.com', 'x.com'] }
+  );
+  assert.equal(classifyRuleChange(base, narrowed), 'weaken');
+  // Adding a site and removing a time window.
+  const twoWindows = scheduled([
+    { days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' },
+    { days: [1, 2, 3, 4, 5], start: '14:00', end: '16:00' }
+  ]);
+  const oneWindow = scheduled(
+    [{ days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' }],
+    { domains: ['youtube.com', 'x.com'] }
+  );
+  assert.equal(classifyRuleChange(twoWindows, oneWindow), 'weaken');
+  // Pause to Block while also dropping a site.
+  assert.equal(classifyRuleChange(twoSites, { ...twoSites, domains: ['youtube.com'], strength: 'pause' }), 'weaken');
+  // Adding a site while shortening the pause countdown.
+  const pauseRule = paused();
+  assert.equal(
+    classifyRuleChange(pauseRule, { ...pauseRule, domains: ['youtube.com', 'x.com'], countdownSeconds: 10 }),
+    'weaken'
+  );
+  // Adding a site while lengthening the pass.
+  assert.equal(
+    classifyRuleChange(pauseRule, { ...pauseRule, domains: ['youtube.com', 'x.com'], passMinutes: 20 }),
+    'weaken'
+  );
+
+  // The planner keeps the old rule in force until the delay passes.
+  let state = fresh();
+  state = saveBlockRule(state, null, {
+    name: 'Pause news',
+    domains: 'youtube.com',
+    schedule: { type: 'scheduled', windows: [{ days: [1, 2, 3, 4, 5], start: '09:00', end: '12:00' }] },
+    strength: 'pause',
+    countdownSeconds: 20,
+    passMinutes: 5
+  }, ctx(start));
+  const id = state.blockRules[0].id;
+  const mixed = saveBlockRule(state, id, { domains: 'youtube.com\nx.com', countdownSeconds: 10 }, ctx(start));
+  assert.equal(mixed.blockRules[0].domains.length, 1, 'the old rule still applies');
+  assert.equal(mixed.blockRules[0].countdownSeconds, 20);
+  assert.equal(mixed.pendingRuleChanges.length, 1);
+  assert.equal(mixed.pendingRuleChanges[0].change.rule.domains.length, 2);
+  const due = applyPendingRuleChanges(mixed, at(mixed.pendingRuleChanges[0].effectiveAt));
+  assert.deepEqual(due.blockRules[0].domains, ['youtube.com', 'x.com']);
+  assert.equal(due.blockRules[0].countdownSeconds, 10);
+});
+
+test('a longer countdown applies at once and a shorter one waits (BLK-06)', () => {
+  const start = '2026-05-04T08:00:00Z';
+  let state = fresh();
+  state = saveBlockRule(state, null, {
+    name: 'Pause news',
+    domains: 'youtube.com',
+    schedule: { type: 'always' },
+    strength: 'pause',
+    countdownSeconds: 20,
+    passMinutes: 5
+  }, ctx(start));
+  const id = state.blockRules[0].id;
+
+  const shorter = saveBlockRule(state, id, { countdownSeconds: 10 }, ctx(start));
+  assert.equal(shorter.blockRules[0].countdownSeconds, 20, 'a shorter countdown waits');
+  assert.equal(shorter.pendingRuleChanges.length, 1);
+
+  const longer = saveBlockRule(state, id, { countdownSeconds: 30 }, ctx(start));
+  assert.equal(longer.blockRules[0].countdownSeconds, 30, 'a longer countdown applies at once');
+  assert.deepEqual(longer.pendingRuleChanges, []);
+
+  const shorterPass = saveBlockRule(state, id, { passMinutes: 1 }, ctx(start));
+  assert.equal(shorterPass.blockRules[0].passMinutes, 1, 'a shorter pass applies at once');
+  assert.deepEqual(shorterPass.pendingRuleChanges, []);
+});
+
+test('an applied delay change is stamped so an older copy cannot undo it (BLK-06, BLK-08)', () => {
+  const start = '2026-05-04T08:00:00Z';
+  let state = fresh();
+  state = setChangeDelay(state, 60, ctx(start));
+  const older = JSON.parse(JSON.stringify(state));
+
+  const lowered = setChangeDelay(state, 0, ctx('2026-05-04T08:05:00Z'));
+  const delayChange = lowered.pendingRuleChanges.find((change) => change.change.type === 'delay');
+  assert.ok(delayChange);
+  assert.equal(delayChange.effectiveAt, '2026-05-04T09:05:00.000Z');
+
+  const applied = applyPendingRuleChanges(lowered, at('2026-05-04T09:05:00Z'), 'pc');
+  assert.equal(applied.settings.changeDelay, 0);
+  assert.deepEqual(applied.pendingRuleChanges, []);
+  assert.equal(applied.stamps.settings, '2026-05-04T09:05:00.000Z|pc');
+
+  // The other device saved this copy after the delay was raised but before it was
+  // lowered, so its settings stamp is newer than the one the plan carried until
+  // the pending change became due.
+  const stale = updateSettings(older, { notifyDevice: 'pc' }, ctx('2026-05-04T08:30:00Z', 'laptop'));
+  const payload = exportSync(stale, { id: 'laptop', name: 'Laptop' }, at('2026-05-04T08:30:00Z'));
+  const merged = mergeSync(applied, payload, ctx('2026-05-04T09:10:00Z', 'pc'));
+  assert.equal(merged.state.settings.changeDelay, 0, 'the new delay survives the merge');
 });
 
 test('rules validate limits and defaults before they reach Chrome (BLK-01)', () => {

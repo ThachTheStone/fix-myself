@@ -964,27 +964,40 @@ export function validateBlockRule(rule) {
   };
 }
 
-// 'strengthen' when the new rule protects at least what the old one protected
-// for the same sites, 'weaken' when it protects less, and 'same' when nothing
-// the extension can observe changes.
+// Compares every aspect of a rule separately (enabled, strength, domains,
+// schedule, countdown and pass length). A single aspect that weakens
+// protection makes the whole edit a weakening one, so strengthening one aspect
+// can never carry a weakening edit past the change delay (BLK-06). The result
+// is 'strengthen' when no aspect weakens and at least one strengthens, and
+// 'same' when nothing the extension can observe changes.
 export function classifyRuleChange(before, after) {
   if (!before) return after.enabled ? 'strengthen' : 'same';
-  if (before.enabled !== after.enabled) return after.enabled ? 'strengthen' : 'weaken';
-  if (!after.enabled) return 'same';
-  if (before.strength !== after.strength) return after.strength === 'block' ? 'strengthen' : 'weaken';
-  const kept = after.domains.filter((domain) => before.domains.includes(domain));
-  if (kept.length < before.domains.length) return 'weaken';
-  if (after.domains.length > before.domains.length) return 'strengthen';
-  if (after.strength === 'pause') {
-    if (before.countdownSeconds !== after.countdownSeconds) return 'weaken';
-    if (before.passMinutes !== after.passMinutes) return 'weaken';
+  if (!after.enabled) return before.enabled ? 'weaken' : 'same';
+  let verdict = 'same';
+  const strengthen = () => { if (verdict === 'same') verdict = 'strengthen'; };
+  const weaken = () => { verdict = 'weaken'; };
+
+  if (!before.enabled) strengthen();
+  if (before.strength !== after.strength) {
+    if (after.strength === 'block') strengthen();
+    else weaken();
   }
+  const kept = after.domains.filter((domain) => before.domains.includes(domain));
+  if (kept.length < before.domains.length) weaken();
+  if (after.domains.length > kept.length) strengthen();
   const beforeIntervals = scheduleIntervals(before.schedule);
   const afterIntervals = scheduleIntervals(after.schedule);
-  if (same(beforeIntervals, afterIntervals)) return 'same';
-  if (coversIntervals(afterIntervals, beforeIntervals)) return 'strengthen';
-  if (coversIntervals(beforeIntervals, afterIntervals)) return 'weaken';
-  return 'weaken';
+  if (!same(beforeIntervals, afterIntervals)) {
+    if (coversIntervals(afterIntervals, beforeIntervals)) strengthen();
+    else weaken();
+  }
+  if (after.strength === 'pause') {
+    if (after.countdownSeconds < before.countdownSeconds) weaken();
+    else if (after.countdownSeconds > before.countdownSeconds) strengthen();
+    if (after.passMinutes > before.passMinutes) weaken();
+    else if (after.passMinutes < before.passMinutes) strengthen();
+  }
+  return verdict;
 }
 
 const delayValue = (value) => {
@@ -1116,7 +1129,7 @@ export function applyPendingRuleChanges(state, now = new Date(), device = 'rule-
   if (!same(result.rules, state.blockRules ?? [])) next = setRoot(next, 'blockRules', result.rules, c);
   next = setRoot(next, 'pendingRuleChanges', result.pendingChanges, c);
   if (result.changeDelay !== undefined) {
-    next = { ...next, settings: { ...next.settings, changeDelay: result.changeDelay } };
+    next = setRoot(next, 'settings', { ...next.settings, changeDelay: result.changeDelay }, c);
   }
   return next;
 }
