@@ -1,3 +1,5 @@
+import { activeRules, coversIntervals, effectiveRules, scheduleIntervals, startOfDay } from '../extension/block-schedule.js';
+
 export const DEFAULT_DOMAINS = ['youtube.com', 'facebook.com', 'instagram.com'];
 export const STORAGE_KEY = 'fix-myself:v1';
 export const STATE_VERSION = 2;
@@ -6,6 +8,17 @@ export const STATUS_LABELS = { open: 'Open', in_progress: 'In progress', complet
 export const MAX_PRIORITIES = 3;
 export const SYNC_FORMAT = 'fix-myself-sync';
 
+// Block rules (BLK-01 to BLK-06).
+export const MAX_BLOCK_RULES = 20;
+export const MAX_RULE_DOMAINS = 30;
+export const MAX_RULE_WINDOWS = 10;
+export const COUNTDOWN_SECONDS = { min: 5, max: 60, default: 15 };
+export const PASS_MINUTES = { min: 1, max: 30, default: 10 };
+export const CHANGE_DELAYS = [0, 10, 60, 'next-day'];
+export const DEFAULT_CHANGE_DELAY = 10;
+export const BLOCK_STRENGTHS = ['block', 'pause'];
+const CLOCK_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
 // Fields that sync between devices. Each carries its own edit stamp.
 export const TASK_FIELDS = [
   'title', 'status', 'pinned', 'supportsMission', 'nextStep', 'effortMinutes', 'criteria',
@@ -13,7 +26,7 @@ export const TASK_FIELDS = [
 ];
 export const REVIEW_RESULTS = ['unreviewed', 'met', 'partly_met', 'needs_review'];
 export const REVIEW_LABELS = { unreviewed: 'Unreviewed', met: 'Met', partly_met: 'Partly met', needs_review: 'Needs review' };
-const ROOT_FIELDS = ['mission', 'nextActionId', 'settings'];
+const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges'];
 const ACTIVE = new Set(['open', 'in_progress']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
@@ -32,7 +45,8 @@ function defaultSettings() {
   return {
     timeZone: deviceTimeZone(),
     reminderLeads: { start: [10], deadline: [60, 1440] },
-    notifyDevice: 'all'
+    notifyDevice: 'all',
+    changeDelay: DEFAULT_CHANGE_DELAY
   };
 }
 
@@ -48,6 +62,8 @@ function defaultState() {
     supersedes: {},
     devices: {},
     settings: defaultSettings(),
+    blockRules: [],
+    pendingRuleChanges: [],
     // Device-local records below this line are not exported for sync.
     focus: null,
     lastLoginDay: null,
@@ -128,10 +144,14 @@ export function migrateState(saved) {
   }
   if (saved?.version === STATE_VERSION && Array.isArray(saved.tasks) && saved.preferences) {
     const defaults = defaultState();
+    const settings = { ...defaults.settings, ...saved.settings };
+    if (!CHANGE_DELAYS.includes(settings.changeDelay)) settings.changeDelay = DEFAULT_CHANGE_DELAY;
     return {
       ...defaults,
       ...saved,
-      settings: { ...defaults.settings, ...saved.settings },
+      blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
+      pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
+      settings,
       preferences: { ...defaults.preferences, ...saved.preferences }
     };
   }
@@ -437,7 +457,9 @@ export function setNextAction(state, id, ctx) {
 
 export function updateSettings(state, changes, ctx) {
   const c = context(ctx);
-  const settings = { ...state.settings, ...changes };
+  // The change delay only moves through setChangeDelay, which enforces BLK-06.
+  const { changeDelay, ...rest } = changes;
+  const settings = { ...state.settings, ...rest };
   if (settings.timeZone) {
     try {
       new Intl.DateTimeFormat('en-CA', { timeZone: settings.timeZone });
@@ -697,6 +719,8 @@ export function exportSync(state, device, now = new Date()) {
       mission: state.mission,
       nextActionId: state.nextActionId,
       settings: state.settings,
+      blockRules: state.blockRules ?? [],
+      pendingRuleChanges: state.pendingRuleChanges ?? [],
       stamps: state.stamps,
       supersedes: state.supersedes,
       tasks: state.tasks,
@@ -715,6 +739,17 @@ function validatePayload(payload) {
   for (const task of payload.data.tasks) {
     if (typeof task.id !== 'string' || typeof task.title !== 'string' || !STATUSES.includes(task.status)) {
       throw new Error('The sync file contains an invalid task.');
+    }
+  }
+  for (const rule of payload.data.blockRules ?? []) {
+    if (typeof rule?.id !== 'string' || typeof rule.name !== 'string' || !Array.isArray(rule.domains)) {
+      throw new Error('The sync file contains an invalid rule.');
+    }
+  }
+  for (const change of payload.data.pendingRuleChanges ?? []) {
+    if (typeof change?.id !== 'string' || typeof change.change?.type !== 'string'
+        || typeof change.effectiveAt !== 'string') {
+      throw new Error('The sync file contains an invalid rule change.');
     }
   }
 }
@@ -789,7 +824,15 @@ export function mergeSync(state, payload, ctx) {
     summary.added += 1;
   }
 
-  const rootLocal = { mission: state.mission, nextActionId: state.nextActionId, settings: state.settings, stamps: state.stamps, supersedes: state.supersedes };
+  const rootLocal = {
+    mission: state.mission,
+    nextActionId: state.nextActionId,
+    settings: state.settings,
+    blockRules: state.blockRules ?? [],
+    pendingRuleChanges: state.pendingRuleChanges ?? [],
+    stamps: state.stamps,
+    supersedes: state.supersedes
+  };
   const { record: root } = mergeFields(rootLocal, remote, ROOT_FIELDS, base, null, conflicts);
 
   const workouts = new Map(state.workouts.map((workout) => [workout.id, workout]));
@@ -858,7 +901,243 @@ export function eraseUserData(state) {
 }
 
 // ---------------------------------------------------------------------------
-// Weekly review and workouts
+// Block rules
+// Rules live in the synced plan and are enforced by the Chrome extension.
+// Changes that weaken protection wait for the change delay so a quick edit
+// cannot unlock a site right away (BLK-06).
+
+function wholeNumber(value, range, message) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < range.min || number > range.max) throw new Error(message);
+  return number;
+}
+
+function cleanSchedule(schedule) {
+  if (schedule?.type === 'always') return { type: 'always' };
+  if (schedule?.type !== 'scheduled') throw new Error('Choose Always or Scheduled for the schedule.');
+  const windows = schedule.windows;
+  if (!Array.isArray(windows) || windows.length === 0) throw new Error('Add at least one time window.');
+  if (windows.length > MAX_RULE_WINDOWS) throw new Error('Add up to 10 time windows.');
+  return {
+    type: 'scheduled',
+    windows: windows.map((window) => {
+      const days = Array.isArray(window?.days) ? window.days.map(Number) : [];
+      if (days.length === 0) throw new Error('Choose at least one day in each time window.');
+      if (days.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) {
+        throw new Error('Choose days of the week for each time window.');
+      }
+      if (!CLOCK_PATTERN.test(String(window?.start ?? '')) || !CLOCK_PATTERN.test(String(window?.end ?? ''))) {
+        throw new Error('Choose a start and end time for each time window.');
+      }
+      if (window.start === window.end) throw new Error('A time window must end at a different time than it starts.');
+      return { days: [...new Set(days)].sort((a, b) => a - b), start: window.start, end: window.end };
+    })
+  };
+}
+
+// Throws a readable message for anything the rule form can send (BLK-01).
+export function validateBlockRule(rule) {
+  const name = String(rule?.name ?? '').trim();
+  if (!name) throw new Error('Enter a rule name.');
+  if (name.length > 60) throw new Error('The rule name must be 60 characters or fewer.');
+  const text = Array.isArray(rule?.domains) ? rule.domains.join('\n') : String(rule?.domains ?? '');
+  const domains = normalizeDomains(text);
+  if (domains.length === 0) throw new Error('Add at least one site to the rule.');
+  if (domains.length > MAX_RULE_DOMAINS) throw new Error('Add up to 30 sites to a rule.');
+  const strength = rule?.strength ?? 'block';
+  if (!BLOCK_STRENGTHS.includes(strength)) throw new Error('Choose Block or Pause for the rule.');
+  const countdownSeconds = rule?.countdownSeconds === undefined || rule?.countdownSeconds === null
+    ? COUNTDOWN_SECONDS.default
+    : wholeNumber(rule.countdownSeconds, COUNTDOWN_SECONDS, 'Set the countdown from 5 to 60 seconds.');
+  const passMinutes = rule?.passMinutes === undefined || rule?.passMinutes === null
+    ? PASS_MINUTES.default
+    : wholeNumber(rule.passMinutes, PASS_MINUTES, 'Set the pass from 1 to 30 minutes.');
+  return {
+    id: rule?.id,
+    name,
+    enabled: rule?.enabled !== false,
+    domains,
+    schedule: cleanSchedule(rule?.schedule),
+    strength,
+    countdownSeconds,
+    passMinutes
+  };
+}
+
+// 'strengthen' when the new rule protects at least what the old one protected
+// for the same sites, 'weaken' when it protects less, and 'same' when nothing
+// the extension can observe changes.
+export function classifyRuleChange(before, after) {
+  if (!before) return after.enabled ? 'strengthen' : 'same';
+  if (before.enabled !== after.enabled) return after.enabled ? 'strengthen' : 'weaken';
+  if (!after.enabled) return 'same';
+  if (before.strength !== after.strength) return after.strength === 'block' ? 'strengthen' : 'weaken';
+  const kept = after.domains.filter((domain) => before.domains.includes(domain));
+  if (kept.length < before.domains.length) return 'weaken';
+  if (after.domains.length > before.domains.length) return 'strengthen';
+  if (after.strength === 'pause') {
+    if (before.countdownSeconds !== after.countdownSeconds) return 'weaken';
+    if (before.passMinutes !== after.passMinutes) return 'weaken';
+  }
+  const beforeIntervals = scheduleIntervals(before.schedule);
+  const afterIntervals = scheduleIntervals(after.schedule);
+  if (same(beforeIntervals, afterIntervals)) return 'same';
+  if (coversIntervals(afterIntervals, beforeIntervals)) return 'strengthen';
+  if (coversIntervals(beforeIntervals, afterIntervals)) return 'weaken';
+  return 'weaken';
+}
+
+const delayValue = (value) => {
+  if (value === 'next-day') return 'next-day';
+  const number = Number(value);
+  return CHANGE_DELAYS.includes(number) ? number : null;
+};
+
+// The moment a waiting change takes effect: a fixed delay, or the start of the
+// next day in the planning time zone.
+function delayMoment(state, c, delay) {
+  if (delay === 'next-day') {
+    const timeZone = state.settings?.timeZone ?? null;
+    return new Date(startOfDay(addDays(localDate(c.now, timeZone), 1), timeZone)).toISOString();
+  }
+  return new Date(c.now.getTime() + Number(delay) * 60_000).toISOString();
+}
+
+const withoutChangesFor = (pending, ruleId) => (pending ?? []).filter((change) => change.ruleId !== ruleId);
+const ruleChanges = (pending) => (pending ?? []).filter((change) => change?.change?.type !== 'delay');
+
+// Creates or edits a rule. Weakening edits become a pending change (BLK-06).
+export function saveBlockRule(state, id, changes, ctx) {
+  const c = context(ctx);
+  const existing = id ? state.blockRules.find((rule) => rule.id === id) ?? null : null;
+  if (id && !existing) throw new Error('This rule no longer exists.');
+  if (!existing && state.blockRules.length >= MAX_BLOCK_RULES) throw new Error('Add up to 20 rules.');
+  const base = existing ?? {
+    id: newId(),
+    name: '',
+    enabled: true,
+    domains: [],
+    schedule: { type: 'always' },
+    strength: 'block',
+    countdownSeconds: COUNTDOWN_SECONDS.default,
+    passMinutes: PASS_MINUTES.default
+  };
+  const rule = validateBlockRule({ ...base, ...changes, id: base.id });
+  if (existing && same(existing, rule)) return state;
+  const verdict = classifyRuleChange(existing, rule);
+  const delay = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
+  if (verdict === 'weaken' && delay !== 0) {
+    const pending = [...withoutChangesFor(state.pendingRuleChanges, rule.id), {
+      id: newId(),
+      ruleId: rule.id,
+      change: { type: 'update', rule },
+      effectiveAt: delayMoment(state, c, delay),
+      createdAt: c.at
+    }];
+    return setRoot(state, 'pendingRuleChanges', pending, c);
+  }
+  const rules = existing
+    ? state.blockRules.map((item) => (item.id === rule.id ? rule : item))
+    : [...state.blockRules, rule];
+  const next = setRoot(state, 'blockRules', rules, c);
+  if (verdict === 'same') return next;
+  const pending = withoutChangesFor(state.pendingRuleChanges, rule.id);
+  return pending.length === (state.pendingRuleChanges ?? []).length
+    ? next
+    : setRoot(next, 'pendingRuleChanges', pending, c);
+}
+
+// Deleting a rule weakens protection, so it waits for the delay too.
+export function deleteBlockRule(state, id, ctx) {
+  const c = context(ctx);
+  if (!state.blockRules.some((item) => item.id === id)) return state;
+  const delay = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
+  if (delay !== 0) {
+    const pending = [...withoutChangesFor(state.pendingRuleChanges, id), {
+      id: newId(),
+      ruleId: id,
+      change: { type: 'delete' },
+      effectiveAt: delayMoment(state, c, delay),
+      createdAt: c.at
+    }];
+    return setRoot(state, 'pendingRuleChanges', pending, c);
+  }
+  const next = setRoot(state, 'blockRules', state.blockRules.filter((item) => item.id !== id), c);
+  const pending = withoutChangesFor(state.pendingRuleChanges, id);
+  return pending.length === (state.pendingRuleChanges ?? []).length
+    ? next
+    : setRoot(next, 'pendingRuleChanges', pending, c);
+}
+
+export function setBlockRuleEnabled(state, id, enabled, ctx) {
+  const rule = state.blockRules.find((item) => item.id === id);
+  if (!rule) throw new Error('This rule no longer exists.');
+  return saveBlockRule(state, id, { enabled }, ctx);
+}
+
+export function cancelPendingRuleChange(state, id, ctx) {
+  const c = context(ctx);
+  const pending = state.pendingRuleChanges ?? [];
+  if (!pending.some((change) => change.id === id)) return state;
+  return setRoot(state, 'pendingRuleChanges', pending.filter((change) => change.id !== id), c);
+}
+
+// A longer wait protects sooner, so it applies at once; a shorter one waits
+// like any other weakening change.
+export function setChangeDelay(state, delay, ctx) {
+  const c = context(ctx);
+  const value = delayValue(delay);
+  if (value === null) throw new Error('Choose how long weaker changes wait.');
+  const current = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
+  if (value === current) return state;
+  const rank = (option) => CHANGE_DELAYS.indexOf(option);
+  if (rank(value) > rank(current)) {
+    return setRoot(state, 'settings', { ...state.settings, changeDelay: value }, c);
+  }
+  const change = {
+    id: newId(),
+    ruleId: null,
+    change: { type: 'delay', changeDelay: value },
+    effectiveAt: delayMoment(state, c, current),
+    createdAt: c.at
+  };
+  return setRoot(state, 'pendingRuleChanges', [...ruleChanges(state.pendingRuleChanges), change], c);
+}
+
+// Moves due changes into the plan. The app and the extension both read the
+// shared schedule module, so they agree on when a change becomes due.
+export function applyPendingRuleChanges(state, now = new Date(), device = 'rule-timer') {
+  const pending = state.pendingRuleChanges ?? [];
+  if (pending.length === 0) return state;
+  const result = effectiveRules(state.blockRules ?? [], pending, now);
+  if (result.changeDelay === undefined && result.pendingChanges.length === pending.length) return state;
+  const c = { at: now.toISOString(), device, now };
+  let next = state;
+  if (!same(result.rules, state.blockRules ?? [])) next = setRoot(next, 'blockRules', result.rules, c);
+  next = setRoot(next, 'pendingRuleChanges', result.pendingChanges, c);
+  if (result.changeDelay !== undefined) {
+    next = { ...next, settings: { ...next.settings, changeDelay: result.changeDelay } };
+  }
+  return next;
+}
+
+// What the desktop hands to the Chrome extension (BLK-03, BLK-05).
+export function planSnapshot(state, now = new Date()) {
+  const next = nextTask(state, planningDay(state, now));
+  return {
+    rules: state.blockRules ?? [],
+    pendingChanges: state.pendingRuleChanges ?? [],
+    timeZone: state.settings?.timeZone ?? null,
+    mission: (state.mission ?? '').slice(0, 240),
+    nextAction: next?.title.slice(0, 160) ?? ''
+  };
+}
+
+// Rules that apply at `now`, for the Settings preview and for tests.
+export function activeBlockRules(state, now = new Date()) {
+  const { rules } = effectiveRules(state.blockRules ?? [], state.pendingRuleChanges ?? [], now);
+  return activeRules(rules, now, state.settings?.timeZone ?? null);
+}
 
 // Delivery for commitments due within [startDay, endDay] in the planning time zone.
 export function deliveryReview(state, startDay, endDay) {
