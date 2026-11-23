@@ -3,6 +3,7 @@ const { randomBytes } = require('node:crypto');
 const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { createFocusBridge, validSnapshot, MAX_PLAN_BYTES, PORT } = require('./focus-bridge.cjs');
+const { listOpenApps } = require('./apps.cjs');
 
 const loginFlag = '--login-launch';
 const loginLaunch = process.platform === 'win32' && process.argv.includes(loginFlag);
@@ -116,6 +117,12 @@ function registerHandlers() {
     fromApp(event);
     showWindow();
   });
+  if (process.platform === 'win32') {
+    ipcMain.handle('desktop:list-apps', async (event) => {
+      fromApp(event);
+      return listOpenApps();
+    });
+  }
   // The planner publishes the focus session and the rule set together. Chrome
   // keeps them, so rules outlive this window (BLK-07).
   ipcMain.handle('desktop:plan', (event, snapshot) => {

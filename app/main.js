@@ -1,12 +1,15 @@
 import {
   activeBlockRules, addToToday, applyPendingRuleChanges, cancelPendingRuleChange, captureTask, chromeCoverage,
-  CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteBlockRule, distractionReview, recordChromeReports,
+  CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteAppPreset, deleteBlockRule, distractionReview,
+  recordChromeReports,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
-  dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isFocused, markDelivered,
+  dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused,
+  markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
   readState, reconcileReminders,
-  registerDevice, remindsOn, resolveConflict, saveBlockRule, saveState, saveTask, saveWorkout,
-  setBlockRuleEnabled, setChangeDelay, setMission, setNextAction, snoozeReminder, startFocus, STATUSES, toggleTask,
+  registerDevice, remindsOn, resolveConflict, saveAppPreset, saveBlockRule, saveState, saveTask, saveWorkout,
+  setAutoAppPreset, setBlockRuleEnabled, setChangeDelay, setMission, setNextAction, snoozeReminder, startFocus,
+  STATUSES, toggleTask,
   todayView, upcomingReminders, updateSettings, weekRange, addDays, WORKOUT_TYPES
 } from './model.js';
 import {
@@ -205,11 +208,16 @@ function renderTimer(now = Date.now()) {
   const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   element('focus-time').textContent = remaining;
   element('start-focus').hidden = active;
+  element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !active);
   const covered = chromeCoverage(state, now).filter((profile) => profile.current).length;
   const coverage = covered === 0 ? t('focus.noCoverage') : t('focus.coverage', { n: covered });
-  const status = active
+  const apps = state.focus?.apps;
+  const sessionStatus = active
     ? desktop ? t('focus.inProgress', { coverage }) : t('focus.localRunning')
     : desktop ? '' : t('focus.localOnly');
+  const status = sessionStatus && apps
+    ? `${sessionStatus} ${t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') })}`
+    : sessionStatus;
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
   if (previousFocusStatus !== active) {
     previousFocusStatus = active;
@@ -792,6 +800,188 @@ function wireRules() {
 }
 
 // ---------------------------------------------------------------------------
+// App presets (APP-01, APP-02). The preset form only appears in the Windows
+// desktop app, where the bridge can list installed apps with an open window.
+
+const presetForm = element('preset-form');
+let presetApps = [];
+let openApps = [];
+
+function presetsEnabled() {
+  return Boolean(desktop?.platform === 'win32' && desktop.listApps);
+}
+
+function presetLabel(preset) {
+  return [
+    preset.strength === 'pause'
+      ? t('apps.pauseMeta', { seconds: preset.countdownSeconds, minutes: preset.passMinutes })
+      : t('apps.blockMeta'),
+    t('apps.appCount', { n: preset.apps.length })
+  ].join(' · ');
+}
+
+function renderPresetApps() {
+  element('preset-apps-empty').hidden = presetApps.length > 0;
+  element('preset-apps').replaceChildren(...presetApps.map((app, index) => h('li', {},
+    h('div', { class: 'rule-detail' },
+      h('p', { class: 'strong', text: app.name }),
+      h('p', { class: 'muted', text: app.path })),
+    h('div', { class: 'task-actions' },
+      h('button', {
+        type: 'button', class: 'text-button', text: t('common.remove'),
+        'aria-label': t('apps.removeApp', { name: app.name }),
+        onclick: () => {
+          presetApps = presetApps.filter((_item, position) => position !== index);
+          renderPresetApps();
+          refreshAppChoices();
+        }
+      })))));
+}
+
+// Offers only apps that are not already in the preset and are never limited.
+function refreshAppChoices() {
+  const chosen = new Set(presetApps.map((app) => app.path.toLowerCase()));
+  const options = openApps.filter((app) => !chosen.has(app.path.toLowerCase()) && !isAlwaysAllowed(app.path));
+  const signature = [locale(), options.map((app) => [app.path, app.name])];
+  if (!cached('preset-open-apps', signature)) {
+    element('preset-open-apps').replaceChildren(...(options.length
+      ? options.map((app) => h('option', { value: app.path, text: app.name }))
+      : [h('option', { value: '', text: t('apps.listEmpty') })]));
+  }
+  element('preset-open-apps').disabled = options.length === 0;
+  element('preset-add-app').disabled = options.length === 0;
+}
+
+function renderFocusPreset() {
+  const presets = state.appPresets ?? [];
+  const signature = [locale(), presets.map((preset) => [preset.id, preset.name]), state.preferences.lastAppPreset];
+  if (!cached('focus-preset-options', signature)) {
+    element('focus-preset').replaceChildren(
+      h('option', { value: '', text: t('apps.noLimit') }),
+      ...presets.map((preset) => h('option', { value: preset.id, text: preset.name })));
+    const last = presets.some((preset) => preset.id === state.preferences.lastAppPreset)
+      ? state.preferences.lastAppPreset
+      : '';
+    element('focus-preset').value = last;
+  }
+}
+
+function renderPresets() {
+  const presets = state.appPresets ?? [];
+  element('preset-empty').hidden = presets.length > 0;
+  element('preset-list').replaceChildren(...presets.map((preset) => h('li', { class: 'rule' },
+    h('div', { class: 'rule-detail' },
+      h('p', { class: 'strong', text: preset.name }),
+      h('p', { class: 'muted', text: presetLabel(preset) })),
+    h('div', { class: 'task-actions' },
+      h('button', { type: 'button', class: 'text-button', text: t('apps.edit'), onclick: () => editPreset(preset) }),
+      h('button', {
+        type: 'button', class: 'text-button', text: t('apps.delete'),
+        onclick: (event) => confirmTwice(event.currentTarget, 'apps.delete',
+          () => attempt(() => deleteAppPreset(state, preset.id, ctx()), element('preset-feedback'), t('apps.deleted')))
+      })))));
+  const autoSignature = [locale(), presets.map((preset) => [preset.id, preset.name]), state.preferences.autoAppPreset];
+  if (!cached('auto-preset', autoSignature)) {
+    element('auto-preset').replaceChildren(
+      h('option', { value: '', text: t('apps.noLimit') }),
+      ...presets.map((preset) => h('option', { value: preset.id, text: preset.name })));
+    const auto = presets.some((preset) => preset.id === state.preferences.autoAppPreset)
+      ? state.preferences.autoAppPreset
+      : '';
+    element('auto-preset').value = auto;
+  }
+  renderFocusPreset();
+}
+
+function updatePresetFormMode() {
+  element('preset-pause-fields').hidden = element('preset-strength').value !== 'pause';
+}
+
+function resetPresetForm() {
+  presetForm.elements.id.value = '';
+  presetForm.elements.name.value = '';
+  presetForm.elements.strength.value = 'block';
+  presetForm.elements.countdownSeconds.value = COUNTDOWN_SECONDS.default;
+  presetForm.elements.passMinutes.value = PASS_MINUTES.default;
+  presetApps = [];
+  renderPresetApps();
+  refreshAppChoices();
+  element('preset-form-title').textContent = t('apps.newPreset');
+  element('preset-cancel').hidden = true;
+  updatePresetFormMode();
+}
+
+function editPreset(preset) {
+  presetForm.elements.id.value = preset.id;
+  presetForm.elements.name.value = preset.name;
+  presetForm.elements.strength.value = preset.strength;
+  presetForm.elements.countdownSeconds.value = preset.countdownSeconds;
+  presetForm.elements.passMinutes.value = preset.passMinutes;
+  presetApps = preset.apps.map((app) => ({ ...app }));
+  renderPresetApps();
+  refreshAppChoices();
+  element('preset-form-title').textContent = t('apps.editPreset');
+  element('preset-cancel').hidden = false;
+  updatePresetFormMode();
+  presetForm.scrollIntoView({ block: 'nearest' });
+  element('preset-name').focus();
+}
+
+async function loadOpenApps(feedback) {
+  try {
+    openApps = await desktop.listApps();
+    refreshAppChoices();
+    if (openApps.length === 0) feedback.textContent = t('apps.listEmpty');
+  } catch {
+    feedback.textContent = t('apps.listFailed');
+  }
+}
+
+function wirePresets() {
+  presetForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    try {
+      applyState(saveAppPreset(state, element('preset-id').value || null, {
+        name: element('preset-name').value,
+        apps: presetApps,
+        strength: element('preset-strength').value,
+        countdownSeconds: element('preset-countdown').value,
+        passMinutes: element('preset-pass').value
+      }, ctx()));
+      element('preset-feedback').textContent = t('apps.saved');
+      resetPresetForm();
+    } catch (error) {
+      element('preset-feedback').textContent = translateError(error.message);
+    }
+  });
+  element('preset-cancel').addEventListener('click', () => {
+    resetPresetForm();
+    element('preset-feedback').textContent = '';
+  });
+  element('preset-strength').addEventListener('change', updatePresetFormMode);
+  element('preset-refresh').addEventListener('click', () => {
+    loadOpenApps(element('preset-feedback')).catch(reportError);
+  });
+  element('preset-add-app').addEventListener('click', () => {
+    const app = openApps.find((item) => item.path === element('preset-open-apps').value);
+    if (!app) return;
+    presetApps = [...presetApps, { path: app.path, name: app.name }];
+    renderPresetApps();
+    refreshAppChoices();
+  });
+  element('auto-preset').addEventListener('change', (event) => {
+    try {
+      applyState(setAutoAppPreset(state, event.target.value || null));
+      element('preset-auto-feedback').textContent = t('apps.autoSaved');
+    } catch (error) {
+      element('preset-auto-feedback').textContent = translateError(error.message);
+      renderPresets();
+    }
+  });
+  resetPresetForm();
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 
 function formatValue(field, value) {
@@ -884,6 +1074,7 @@ async function refreshPreferences() {
   renderSettingsLists();
   element('device-name').value = device.name;
   refreshNotifications().catch(reportError);
+  if (presetsEnabled() && openApps.length === 0) loadOpenApps(element('preset-feedback')).catch(reportError);
   if (!desktop) return;
   try {
     const status = await desktop.status();
@@ -951,6 +1142,7 @@ function render() {
   renderSettingsLists();
   renderCoverage();
   renderRules();
+  renderPresets();
   renderTimer(now.getTime());
   syncChrome();
   scheduleReminders(now);
@@ -1038,7 +1230,11 @@ function wireToday() {
       missionDialog.close();
     }
   });
-  element('start-focus').addEventListener('click', () => attempt(() => startFocus(state)));
+  element('start-focus').addEventListener('click', () => {
+    const select = element('focus-preset');
+    const options = select.hidden ? {} : { presetId: select.value || null };
+    attempt(() => startFocus(state, new Date(), options));
+  });
   element('next-select').addEventListener('change', (event) => {
     attempt(() => setNextAction(state, event.target.value || null, ctx()));
   });
@@ -1158,6 +1354,7 @@ function wireSettings() {
       applyState({
         ...state,
         preferences: {
+          ...state.preferences,
           focusMinutes: Number(duration.value),
           focusAtLogin: startup.checked && automatic.checked,
           domains: hosts,
@@ -1262,6 +1459,7 @@ function wireSettings() {
     for (const node of document.querySelectorAll('.feedback')) node.textContent = '';
     sectionCache.clear();
     resetRuleForm();
+    resetPresetForm();
     render();
     if (currentView === 'task') renderDetail(false);
     if (currentView === 'settings') refreshNotifications().catch(reportError);
@@ -1275,6 +1473,7 @@ async function boot() {
   state = reconcileReminders(registerDevice(state, { ...device, platform: platformName() }));
   if (desktop?.platform === 'win32') element('windows-settings').hidden = false;
   if (desktop) element('browser-settings').hidden = false;
+  if (presetsEnabled()) element('app-presets').hidden = false;
   if (desktop?.loginLaunch) state = onLogin(state);
   desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
   saveState(localStorage, state);
@@ -1284,6 +1483,7 @@ async function boot() {
   wireDetail();
   wireReview();
   wireRules();
+  wirePresets();
   wireSettings();
   window.addEventListener('hashchange', navigate);
   document.addEventListener('visibilitychange', () => {

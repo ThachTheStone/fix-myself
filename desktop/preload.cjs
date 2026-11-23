@@ -8,5 +8,6 @@ contextBridge.exposeInMainWorld('fixMyselfDesktop', {
   publishPlan: (snapshot) => ipcRenderer.invoke('desktop:plan', snapshot),
   chromeReports: () => ipcRenderer.invoke('desktop:chrome-reports'),
   setBackground: (enabled) => ipcRenderer.invoke('desktop:set-background', enabled),
+  listApps: () => ipcRenderer.invoke('desktop:list-apps'),
   show: () => ipcRenderer.invoke('desktop:show')
 });

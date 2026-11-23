@@ -19,6 +19,15 @@ export const DEFAULT_CHANGE_DELAY = 10;
 export const BLOCK_STRENGTHS = ['block', 'pause'];
 const CLOCK_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+// App presets (APP-01, APP-02, APP-08).
+export const MAX_APP_PRESETS = 10;
+export const MAX_PRESET_APPS = 30;
+export const ALWAYS_ALLOWED_APPS = [
+  'explorer.exe', 'systemsettings.exe', 'taskmgr.exe', 'applicationframehost.exe',
+  'shellexperiencehost.exe', 'startmenuexperiencehost.exe', 'searchhost.exe', 'lockapp.exe', 'consent.exe',
+  'narrator.exe', 'magnify.exe', 'osk.exe', 'fix myself.exe'
+];
+
 // Fields that sync between devices. Each carries its own edit stamp.
 export const TASK_FIELDS = [
   'title', 'status', 'pinned', 'supportsMission', 'nextStep', 'effortMinutes', 'criteria',
@@ -26,7 +35,7 @@ export const TASK_FIELDS = [
 ];
 export const REVIEW_RESULTS = ['unreviewed', 'met', 'partly_met', 'needs_review'];
 export const REVIEW_LABELS = { unreviewed: 'Unreviewed', met: 'Met', partly_met: 'Partly met', needs_review: 'Needs review' };
-const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges'];
+const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges', 'appPresets'];
 const ACTIVE = new Set(['open', 'in_progress']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
@@ -64,6 +73,7 @@ function defaultState() {
     settings: defaultSettings(),
     blockRules: [],
     pendingRuleChanges: [],
+    appPresets: [],
     // Device-local records below this line are not exported for sync.
     focus: null,
     lastLoginDay: null,
@@ -71,7 +81,10 @@ function defaultState() {
     conflicts: [],
     peers: {},
     chrome: { profiles: {} },
-    preferences: { focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS], keepRunning: true }
+    preferences: {
+      focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS], keepRunning: true,
+      autoAppPreset: null, lastAppPreset: null
+    }
   };
 }
 
@@ -151,6 +164,7 @@ export function migrateState(saved) {
       ...saved,
       blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
       pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
+      appPresets: Array.isArray(saved.appPresets) ? saved.appPresets : defaults.appPresets,
       settings,
       preferences: { ...defaults.preferences, ...saved.preferences }
     };
@@ -557,14 +571,38 @@ export function isFocused(focus, now = Date.now()) {
   return Boolean(focus && focus.endAt > now);
 }
 
-export function startFocus(state, now = new Date()) {
+function copyPreset(preset) {
+  return {
+    presetId: preset.id,
+    name: preset.name,
+    apps: preset.apps.map((app) => ({ path: app.path, name: app.name })),
+    strength: preset.strength,
+    countdownSeconds: preset.countdownSeconds,
+    passMinutes: preset.passMinutes
+  };
+}
+
+// `options.presetId` is undefined for sessions that should not touch the app
+// limit, null for a manual "No app limit" choice, or a preset id (APP-02).
+export function startFocus(state, now = new Date(), options = {}) {
   if (isFocused(state.focus, now.getTime())) return state;
   const { focusMinutes, domains } = state.preferences;
+  let preset = null;
+  if (options.presetId != null) {
+    const chosen = (state.appPresets ?? []).find((item) => item.id === options.presetId);
+    if (!chosen) throw new Error('This preset no longer exists.');
+    preset = copyPreset(chosen);
+  }
+  const preferences = options.presetId === undefined
+    ? state.preferences
+    : { ...state.preferences, lastAppPreset: preset ? preset.presetId : null };
   return {
     ...state,
+    preferences,
     focus: {
       endAt: now.getTime() + focusMinutes * 60_000,
-      domains: [...domains]
+      domains: [...domains],
+      apps: preset
     }
   };
 }
@@ -572,15 +610,99 @@ export function startFocus(state, now = new Date()) {
 export function onLogin(state, now = new Date()) {
   const day = planningDay(state, now);
   if (!state.preferences.focusAtLogin || state.lastLoginDay === day) return state;
-  return { ...startFocus(state, now), lastLoginDay: day };
+  const auto = state.preferences.autoAppPreset;
+  const preset = auto ? (state.appPresets ?? []).find((item) => item.id === auto) : null;
+  return { ...startFocus(state, now, preset ? { presetId: preset.id } : {}), lastLoginDay: day };
 }
 
 export function focusSnapshot(state, now = new Date()) {
   if (!isFocused(state.focus, now.getTime())) return null;
+  // Executable paths stay on this device; the Chrome bridge only needs timing.
+  const { apps, ...focus } = state.focus;
   return {
-    ...state.focus,
+    ...focus,
     nextAction: nextTask(state, planningDay(state, now))?.title.slice(0, 160) ?? null
   };
+}
+
+// ---------------------------------------------------------------------------
+// App presets (APP-01, APP-02, APP-08). Presets are part of the synced plan;
+// the preset a session started with is copied into the session.
+
+const APP_PATH_LIMIT = 260;
+
+export function isAlwaysAllowed(path) {
+  const parts = String(path ?? '').split(/[\\/]/);
+  return ALWAYS_ALLOWED_APPS.includes(parts[parts.length - 1].toLowerCase());
+}
+
+export function validateAppPreset(preset) {
+  const name = typeof preset?.name === 'string' ? preset.name.trim() : '';
+  if (!name) throw new Error('Enter a preset name.');
+  if (name.length > 60) throw new Error('The preset name must be 60 characters or fewer.');
+  const apps = [];
+  const seen = new Set();
+  for (const app of Array.isArray(preset?.apps) ? preset.apps : []) {
+    const path = typeof app?.path === 'string' ? app.path.trim() : '';
+    if (!path || path.length > APP_PATH_LIMIT || !/\.exe$/i.test(path)) throw new Error('Choose apps from the list.');
+    const key = path.toLowerCase();
+    if (seen.has(key) || isAlwaysAllowed(path)) continue;
+    seen.add(key);
+    const file = path.split(/[\\/]/).pop().replace(/\.exe$/i, '');
+    const label = typeof app.name === 'string' && app.name.trim() ? app.name.trim().slice(0, 80) : file;
+    apps.push({ path, name: label });
+  }
+  if (apps.length === 0) throw new Error('Add at least one app to the preset.');
+  if (apps.length > MAX_PRESET_APPS) throw new Error('Add up to 30 apps to a preset.');
+  const strength = preset?.strength ?? 'block';
+  if (!BLOCK_STRENGTHS.includes(strength)) throw new Error('Choose Block or Pause for the preset.');
+  const countdownSeconds = preset?.countdownSeconds === undefined || preset?.countdownSeconds === null
+    ? COUNTDOWN_SECONDS.default
+    : wholeNumber(preset.countdownSeconds, COUNTDOWN_SECONDS, 'Set the countdown from 5 to 60 seconds.');
+  const passMinutes = preset?.passMinutes === undefined || preset?.passMinutes === null
+    ? PASS_MINUTES.default
+    : wholeNumber(preset.passMinutes, PASS_MINUTES, 'Set the pass from 1 to 30 minutes.');
+  return { name, apps, strength, countdownSeconds, passMinutes };
+}
+
+export function saveAppPreset(state, id, changes, ctx) {
+  const existing = id ? (state.appPresets ?? []).find((preset) => preset.id === id) : null;
+  if (id && !existing) throw new Error('This preset no longer exists.');
+  if (!existing && (state.appPresets ?? []).length >= MAX_APP_PRESETS) throw new Error('Add up to 10 presets.');
+  const preset = {
+    id: existing?.id ?? newId(),
+    ...validateAppPreset({ ...(existing ?? {}), ...changes })
+  };
+  if (existing && same(existing, preset)) return state;
+  const list = existing
+    ? (state.appPresets ?? []).map((item) => (item.id === preset.id ? preset : item))
+    : [...(state.appPresets ?? []), preset];
+  return setRoot(state, 'appPresets', list, context(ctx));
+}
+
+export function deleteAppPreset(state, id, ctx) {
+  const list = state.appPresets ?? [];
+  if (!list.some((preset) => preset.id === id)) return state;
+  const next = setRoot(state, 'appPresets', list.filter((preset) => preset.id !== id), context(ctx));
+  const preferences = next.preferences ?? {};
+  if (preferences.autoAppPreset !== id && preferences.lastAppPreset !== id) return next;
+  return {
+    ...next,
+    preferences: {
+      ...preferences,
+      autoAppPreset: preferences.autoAppPreset === id ? null : preferences.autoAppPreset,
+      lastAppPreset: preferences.lastAppPreset === id ? null : preferences.lastAppPreset
+    }
+  };
+}
+
+export function setAutoAppPreset(state, id) {
+  if (id != null && !(state.appPresets ?? []).some((preset) => preset.id === id)) {
+    throw new Error('This preset no longer exists.');
+  }
+  const value = id ?? null;
+  if ((state.preferences.autoAppPreset ?? null) === value) return state;
+  return { ...state, preferences: { ...state.preferences, autoAppPreset: value } };
 }
 
 // ---------------------------------------------------------------------------
@@ -721,6 +843,7 @@ export function exportSync(state, device, now = new Date()) {
       settings: state.settings,
       blockRules: state.blockRules ?? [],
       pendingRuleChanges: state.pendingRuleChanges ?? [],
+      appPresets: state.appPresets ?? [],
       stamps: state.stamps,
       supersedes: state.supersedes,
       tasks: state.tasks,
@@ -750,6 +873,11 @@ function validatePayload(payload) {
     if (typeof change?.id !== 'string' || typeof change.change?.type !== 'string'
         || typeof change.effectiveAt !== 'string') {
       throw new Error('The sync file contains an invalid rule change.');
+    }
+  }
+  for (const preset of payload.data.appPresets ?? []) {
+    if (typeof preset?.id !== 'string' || typeof preset.name !== 'string' || !Array.isArray(preset.apps)) {
+      throw new Error('The sync file contains an invalid app preset.');
     }
   }
 }
@@ -830,6 +958,7 @@ export function mergeSync(state, payload, ctx) {
     settings: state.settings,
     blockRules: state.blockRules ?? [],
     pendingRuleChanges: state.pendingRuleChanges ?? [],
+    appPresets: state.appPresets ?? [],
     stamps: state.stamps,
     supersedes: state.supersedes
   };

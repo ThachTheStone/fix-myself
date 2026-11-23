@@ -52,6 +52,14 @@ A weaker change — turning a rule off, removing sites, shortening a window, swi
 
 The extension evaluates the schedules itself on a 30-second alarm, so a rule still applies when the desktop app is closed or Chrome starts without it.
 
+## App presets
+
+**Settings → App presets** (Windows desktop app) names a list of apps for a kind of work, such as VS Code and Claude Desktop for a coding session. Refresh the open apps, add each one by name, and choose **Block** or **Pause** with its own countdown and pass. A preset holds up to 30 apps, up to 10 presets fit, and Windows' own shell — File Explorer, Settings, Task Manager and similar — is never part of a preset.
+
+Starting focus from Today lets you pick a preset or **No app limit**, with your last choice preselected. **Preset for automatic sessions** chooses what a focus session started at sign-in uses, and stays **No app limit** until you set it. The app copies the preset when the session starts, so editing a preset only affects sessions that start later. Presets travel in sync files.
+
+Presets are stored and ready, but limiting other apps during a session (APP-03) is not built yet, so a session with a preset still blocks only the selected websites.
+
 ## Reminders and sync
 
 Each task can remind you before its work blocks and its deadline. Set lead times, the planning time zone and which device receives reminders in **Settings → Planning and reminders**. Due reminders also appear on Today, where you can snooze or dismiss them.

@@ -204,8 +204,8 @@ test('a block rule is created in Settings, keeps a weaker edit waiting, and surv
   await windows.getByLabel('Start', { exact: true }).fill('22:00');
   await windows.getByLabel('End', { exact: true }).fill('02:00');
   await page.getByLabel('When a listed site opens').selectOption('pause');
-  await page.getByLabel('Countdown (seconds)').fill('20');
-  await page.getByLabel('Pass (minutes)').fill('5');
+  await page.locator('#block-rules').getByLabel('Countdown (seconds)').fill('20');
+  await page.locator('#block-rules').getByLabel('Pass (minutes)').fill('5');
   await page.getByRole('button', { name: 'Save rule' }).click();
   await page.getByText('Rule saved.').waitFor();
 
@@ -220,7 +220,7 @@ test('a block rule is created in Settings, keeps a weaker edit waiting, and surv
 
   // A shorter countdown protects less, so the edit waits for the change delay (BLK-06).
   await page.locator('#rule-list').getByRole('button', { name: 'Edit', exact: true }).click();
-  await page.getByLabel('Countdown (seconds)').fill('10');
+  await page.locator('#block-rules').getByLabel('Countdown (seconds)').fill('10');
   await page.getByRole('button', { name: 'Save rule' }).click();
   await page.getByText('Saved. This weaker change applies after the delay.').waitFor();
   await page.locator('#pending-rule-list').getByText('Weaker version of Late evening').waitFor();
@@ -295,4 +295,70 @@ test('Chromium blocks existing and new tabs, retains the cached session, and rel
   await existing.getByRole('link', { name: 'Open site' }).waitFor({ timeout: 15_000 });
   await next.goto(website);
   await next.getByText('Test site').waitFor();
+});
+
+test('Windows app presets shape the next focus session from Settings and Today (APP-01, APP-02)', { timeout: 40_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const url = `http://127.0.0.1:${app.httpServer.address().port}`;
+  const context = await launch(t);
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    const apps = [
+      { path: 'C:\\Program Files\\Microsoft VS Code\\Code.exe', name: 'Visual Studio Code' },
+      { path: 'C:\\Windows\\explorer.exe', name: 'Windows Explorer' },
+      { path: 'C:\\Program Files\\Slack\\slack.exe', name: 'Slack' }
+    ];
+    const nothing = async () => {};
+    window.fixMyselfDesktop = {
+      platform: 'win32',
+      loginLaunch: false,
+      status: async () => ({ startup: false, pairingCode: 'f'.repeat(64) }),
+      setStartup: nothing,
+      publishPlan: nothing,
+      chromeReports: async () => [],
+      setBackground: nothing,
+      listApps: async () => apps,
+      show: nothing
+    };
+  });
+  await page.goto(url + '/#settings');
+  const panel = page.locator('#app-presets');
+
+  await panel.getByLabel('Preset name').fill('Writing');
+  await panel.getByRole('button', { name: 'Refresh open apps' }).click();
+  const choices = panel.getByLabel('Apps with an open window');
+  await choices.selectOption({ label: 'Visual Studio Code' });
+  await panel.getByRole('button', { name: 'Add app', exact: true }).click();
+  await page.locator('#preset-apps').getByText('Visual Studio Code').waitFor();
+  // The shell is never limited and a chosen app leaves the list (APP-01).
+  assert.deepEqual(await choices.locator('option').allTextContents(), ['Slack']);
+
+  await panel.getByLabel('When an app outside the preset comes to the front').selectOption('pause');
+  await panel.getByLabel('Countdown (seconds)').fill('20');
+  await panel.getByLabel('Pass (minutes)').fill('5');
+  await panel.getByRole('button', { name: 'Save preset' }).click();
+  await page.getByText('Preset saved.').waitFor();
+  const list = page.locator('#preset-list');
+  await list.getByText('Writing').waitFor();
+  assert.equal(await list.locator('li .muted').first().textContent(), '20-second pause, 5-minute pass · 1 app');
+
+  await panel.getByLabel('Preset for automatic sessions').selectOption({ label: 'Writing' });
+  await page.getByText('Automatic session preset saved.').waitFor();
+
+  await page.getByRole('link', { name: 'Today', exact: true }).click();
+  const session = page.getByLabel('Apps for this session');
+  await session.selectOption({ label: 'Writing' });
+  await page.getByRole('button', { name: 'Start focus' }).click();
+  await page.getByText('Apps: Visual Studio Code', { exact: false }).waitFor();
+  assert.equal(await session.isVisible(), false);
+
+  await page.reload();
+  await page.getByText('Apps: Visual Studio Code', { exact: false }).waitFor();
+  assert.equal(await page.getByLabel('Apps for this session').isVisible(), false);
+
+  // Without the desktop bridge the panel stays hidden in the browser (APP-01).
+  const plain = await context.newPage();
+  await plain.goto(url + '/#settings');
+  assert.equal(await plain.locator('#app-presets').isVisible(), false);
 });
