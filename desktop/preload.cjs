@@ -9,5 +9,11 @@ contextBridge.exposeInMainWorld('fixMyselfDesktop', {
   chromeReports: () => ipcRenderer.invoke('desktop:chrome-reports'),
   setBackground: (enabled) => ipcRenderer.invoke('desktop:set-background', enabled),
   listApps: () => ipcRenderer.invoke('desktop:list-apps'),
+  setAppLimit: (limit) => ipcRenderer.invoke('desktop:app-limit', limit),
+  takeAppPass: (path, reason) => ipcRenderer.invoke('desktop:app-pass', path, reason),
+  appCoverage: () => ipcRenderer.invoke('desktop:app-coverage'),
+  onAppIntervention: (callback) => ipcRenderer.on('desktop:app-intervention', (_event, view) => callback(view)),
+  onAppEvent: (callback) => ipcRenderer.on('desktop:app-event', (_event, record) => callback(record)),
+  onAppCoverage: (callback) => ipcRenderer.on('desktop:app-coverage', (_event, coverage) => callback(coverage)),
   show: () => ipcRenderer.invoke('desktop:show')
 });

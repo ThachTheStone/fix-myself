@@ -366,3 +366,93 @@ test('Windows app presets shape the next focus session from Settings and Today (
   await plain.goto(url + '/#settings');
   assert.equal(await plain.locator('#app-presets').isVisible(), false);
 });
+
+test('an app outside the preset shows the intervention, a pause pass is requested, and Review counts it (APP-03, APP-05, APP-09)', { timeout: 40_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const url = `http://127.0.0.1:${app.httpServer.address().port}`;
+  const context = await launch(t);
+  const page = await context.newPage();
+  await page.addInitScript(() => {
+    const nothing = async () => {};
+    const handlers = {};
+    window.appTest = { limits: [], passes: [], handlers };
+    window.fixMyselfDesktop = {
+      platform: 'win32',
+      loginLaunch: false,
+      status: async () => ({ startup: false, pairingCode: 'f'.repeat(64) }),
+      setStartup: nothing,
+      publishPlan: nothing,
+      chromeReports: async () => [],
+      setBackground: nothing,
+      show: nothing,
+      listApps: async () => [{ path: 'C:\Apps\Code.exe', name: 'VS Code' }],
+      setAppLimit: async (limit) => { window.appTest.limits.push(limit); },
+      takeAppPass: async (path, reason) => { window.appTest.passes.push({ path, reason }); return Date.now() + 60_000; },
+      appCoverage: async () => ({ state: 'running', partial: [] }),
+      onAppIntervention: (callback) => { handlers.intervene = callback; },
+      onAppEvent: (callback) => { handlers.event = callback; },
+      onAppCoverage: (callback) => { handlers.coverage = callback; }
+    };
+  });
+  await page.goto(url + '/#settings');
+  const panel = page.locator('#app-presets');
+  await panel.getByLabel('Preset name').fill('Coding');
+  await panel.getByRole('button', { name: 'Add app', exact: true }).click();
+  await panel.getByLabel('When an app outside the preset comes to the front').selectOption('pause');
+  await panel.getByLabel('Countdown (seconds)').fill('5');
+  await panel.getByRole('button', { name: 'Save preset' }).click();
+  await page.getByText('Preset saved.').waitFor();
+
+  await page.getByRole('link', { name: 'Today', exact: true }).click();
+  await page.getByLabel('Apps for this session').selectOption({ label: 'Coding' });
+  await page.getByRole('button', { name: 'Start focus' }).click();
+  await page.getByText('Apps: VS Code', { exact: false }).waitFor();
+  // The running session's preset reaches the desktop guard (APP-03).
+  await page.waitForFunction(() => window.appTest.limits.some((limit) => limit?.name === 'Coding'));
+  const limit = await page.evaluate(() => window.appTest.limits.findLast((item) => item));
+  assert.equal(limit.strength, 'pause');
+  assert.deepEqual(limit.apps, [{ path: 'C:\Apps\Code.exe', name: 'VS Code' }]);
+
+  await page.evaluate((endAt) => {
+    window.appTest.handlers.event({ kind: 'pause', path: 'C:\Apps\Slack.exe', name: 'Slack', at: new Date().toISOString() });
+    window.appTest.handlers.intervene({
+      mode: 'pause', app: 'Slack', path: 'C:\Apps\Slack.exe', preset: 'Coding', endAt,
+      allowed: ['VS Code'], nextAction: null, countdownSeconds: 2, passMinutes: 10
+    });
+  }, limit.endAt);
+  const dialog = page.locator('#app-dialog');
+  await dialog.getByText('Slack was minimized.').waitFor();
+  await dialog.getByText('Allowed apps: VS Code').waitFor();
+  const proceed = dialog.getByRole('button', { name: 'Continue for 10 min' });
+  assert.equal(await proceed.isDisabled(), true, 'the countdown comes first (APP-05)');
+  await dialog.getByLabel('Why do you need it? (optional)').fill('Reply to the team');
+  await page.waitForFunction(() => !document.getElementById('app-dialog-continue').disabled, null, { timeout: 5000 });
+  await proceed.click();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.deepEqual(await page.evaluate(() => window.appTest.passes),
+    [{ path: 'C:\Apps\Slack.exe', reason: 'Reply to the team' }]);
+  await page.evaluate(() => window.appTest.handlers.event({
+    kind: 'pass', path: 'C:\Apps\Slack.exe', name: 'Slack', reason: 'Reply to the team', at: new Date().toISOString()
+  }));
+
+  // A Block preset offers no continue (APP-05).
+  await page.evaluate((endAt) => window.appTest.handlers.intervene({
+    mode: 'block', app: 'Game', path: 'C:\Games\Game.exe', preset: 'Coding', endAt,
+    allowed: ['VS Code'], nextAction: 'Write the report', countdownSeconds: null, passMinutes: null
+  }), limit.endAt);
+  await dialog.getByText('Next: Write the report').waitFor();
+  assert.equal(await dialog.getByRole('button', { name: /Continue/ }).isVisible(), false);
+  await dialog.getByRole('button', { name: 'Back to Today' }).click();
+  await dialog.waitFor({ state: 'hidden' });
+
+  // Coverage problems are shown on Today (APP-07).
+  await page.evaluate(() => window.appTest.handlers.coverage({ state: 'running', partial: ['?'] }));
+  await page.getByText('Some windows could not be limited', { exact: false }).waitFor();
+
+  await page.getByRole('link', { name: 'Review', exact: true }).click();
+  const review = page.locator('#app-review');
+  await review.getByText('Slack').first().waitFor();
+  await review.getByText('0 blocked · 1 paused · 1 passes').waitFor();
+  await review.getByText('Slack: Reply to the team', { exact: false }).waitFor();
+});

@@ -58,7 +58,7 @@ The extension evaluates the schedules itself on a 30-second alarm, so a rule sti
 
 Starting focus from Today lets you pick a preset or **No app limit**, with your last choice preselected. **Preset for automatic sessions** chooses what a focus session started at sign-in uses, and stays **No app limit** until you set it. The app copies the preset when the session starts, so editing a preset only affects sessions that start later. Presets travel in sync files.
 
-Presets are stored and ready, but limiting other apps during a session (APP-03) is not built yet, so a session with a preset still blocks only the selected websites.
+During a session with a preset, Fix Myself watches which window is in front. When an app outside the preset comes to the front, it is minimized (never closed) and Fix Myself explains why, with the allowed apps, the end time and your next action. With **Pause**, you can continue after the countdown and get a pass for that app; with **Block**, there is no way through until the session ends. File Explorer, Settings, Task Manager, sign-in and security prompts, accessibility tools and Fix Myself itself are always allowed. Fix Myself must be running; if it cannot limit a window (for example an app running as administrator), Today says so. The Review page lists apps that were stopped, paused or let through, with the reasons you gave. Only the app name, path and time are recorded on this PC, never window titles.
 
 ## Reminders and sync
 

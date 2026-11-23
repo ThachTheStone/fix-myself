@@ -250,6 +250,15 @@
         <p id="distraction-gaps" class="muted" hidden></p>
         <p class="muted" data-i18n="review.androidUsage">Android usage minutes are not reported yet.</p>
       </section>
+      <section class="tasks-section" id="app-review" aria-labelledby="app-review-label" hidden>
+        <h2 id="app-review-label" data-i18n="appReview.title">Apps outside your presets</h2>
+        <p class="muted" data-i18n="appReview.help">Apps that focus presets stopped or paused on this PC, separate from website blocking.</p>
+        <ul id="app-review-list" class="task-list"></ul>
+        <p class="muted" id="app-review-empty" hidden data-i18n="appReview.empty">No apps were stopped in this period.</p>
+        <h3 data-i18n="appReview.reasons">Reasons for passes</h3>
+        <ul id="app-review-reasons" class="compact-list"></ul>
+        <p class="muted" id="app-review-reasons-empty" hidden data-i18n="appReview.noReasons">No reasons entered.</p>
+      </section>
       <section class="tasks-section" aria-labelledby="workout-label">
         <h2 id="workout-label" data-i18n="review.workouts">Workouts</h2>
         <form id="workout-form" class="panel settings-panel">
@@ -355,7 +364,7 @@
 
       <section class="panel settings-panel" id="app-presets" aria-labelledby="presets-title" hidden>
         <h2 id="presets-title" data-i18n="apps.title">App presets</h2>
-        <p class="muted" data-i18n="apps.help">Presets remember the Windows apps a focus session allows, so you can start a session with only the apps your work needs. Enforcement from presets is not built yet: the session records the choice for later.</p>
+        <p class="muted" data-i18n="apps.help">Presets remember the Windows apps a focus session allows, so you can start a session with only the apps your work needs. During the session, other apps are minimized when they come to the front.</p>
         <ul id="preset-list" class="compact-list"></ul>
         <p id="preset-empty" class="muted" data-i18n="apps.empty">No presets yet. Add one to prepare a focus session with only the apps you need.</p>
         <form id="preset-form" class="rule-form">
@@ -501,6 +510,25 @@
       <div class="dialog-actions">
         <button class="button secondary" type="button" data-close-dialog data-i18n="common.cancel">Cancel</button>
         <button class="button primary" type="submit" data-i18n="dialog.saveMission">Save mission</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="app-dialog" aria-labelledby="app-dialog-title">
+    <form id="app-dialog-form" method="dialog">
+      <h2 id="app-dialog-title" data-i18n="appBlock.title">This app is outside your focus preset</h2>
+      <p id="app-dialog-app" class="strong"></p>
+      <p id="app-dialog-session" class="muted"></p>
+      <p id="app-dialog-allowed"></p>
+      <p id="app-dialog-next"></p>
+      <div id="app-dialog-pause" hidden>
+        <p id="app-dialog-countdown" role="status"></p>
+        <label for="app-dialog-reason" data-i18n="appBlock.reason">Why do you need it? (optional)</label>
+        <input id="app-dialog-reason" maxlength="200" autocomplete="off">
+        <p id="app-dialog-feedback" class="feedback" role="alert"></p>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" id="app-dialog-continue" hidden></button>
+        <button class="button primary" type="submit" data-i18n="appBlock.back">Back to Today</button>
       </div>
     </form>
   </dialog>
