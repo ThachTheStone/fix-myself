@@ -1,10 +1,13 @@
 import {
-  addToToday, captureTask, chromeCoverage, distractionReview, recordChromeReports, DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
+  activeBlockRules, addToToday, applyPendingRuleChanges, cancelPendingRuleChange, captureTask, chromeCoverage,
+  CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteBlockRule, distractionReview, recordChromeReports,
+  DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isFocused, markDelivered,
-  mergeSync, normalizeDomains, onLogin, parseLeadTimes, pendingDelivery, planningDay, readState, reconcileReminders,
-  registerDevice, remindsOn, resolveConflict, saveState, saveTask, saveWorkout,
-  setMission, setNextAction, snoozeReminder, startFocus, STATUSES, toggleTask, todayView,
-  upcomingReminders, updateSettings, weekRange, addDays, WORKOUT_TYPES
+  mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
+  readState, reconcileReminders,
+  registerDevice, remindsOn, resolveConflict, saveBlockRule, saveState, saveTask, saveWorkout,
+  setBlockRuleEnabled, setChangeDelay, setMission, setNextAction, snoozeReminder, startFocus, STATUSES, toggleTask,
+  todayView, upcomingReminders, updateSettings, weekRange, addDays, WORKOUT_TYPES
 } from './model.js';
 import {
   exactTiming, nativeReminders, openExactTimingSetting, permissionState, requestPermission,
@@ -184,7 +187,15 @@ const platformName = () => desktop ? 'windows' : nativeReminders ? 'android' : '
 // Focus and Chrome
 
 function syncChrome() {
-  if (desktop) desktop.publishFocus(focusSnapshot(state)).catch(reportError);
+  if (desktop) desktop.publishPlan({ focus: focusSnapshot(state), plan: planSnapshot(state) }).catch(reportError);
+}
+
+// A waiting change becomes real when its moment passes, even if Settings is
+// closed (BLK-06). The extension applies the same moment by itself.
+function checkRuleChanges() {
+  if (!state.pendingRuleChanges?.length) return;
+  const next = applyPendingRuleChanges(state);
+  if (next !== state) applyState(next);
 }
 
 function renderTimer(now = Date.now()) {
@@ -569,6 +580,217 @@ function renderCoverage() {
 }
 
 // ---------------------------------------------------------------------------
+// Block rules
+
+const ruleForm = element('rule-form');
+const RULE_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+// 7 January 2024 is a Sunday, so the stored day numbers map to weekday names.
+const dayName = (day) => new Intl.DateTimeFormat(locale(), { weekday: 'short' }).format(new Date(Date.UTC(2024, 0, 7 + day)));
+
+function delayLabel(value) {
+  if (value === 'next-day') return t('rules.delayNextDay');
+  if (Number(value) === 0) return t('rules.delayNone');
+  if (Number(value) === 60) return t('rules.delayHour');
+  return t('rules.delayTen');
+}
+
+function scheduleLabel(schedule) {
+  if (schedule?.type !== 'scheduled') return t('rules.alwaysOn');
+  return schedule.windows.map((window) => `${window.days.map(dayName).join(', ')} ${window.start}–${window.end}`).join(' · ');
+}
+
+function ruleLabel(rule) {
+  return [
+    rule.strength === 'pause'
+      ? t('rules.pauseMeta', { seconds: rule.countdownSeconds, minutes: rule.passMinutes })
+      : t('rules.blockMeta'),
+    scheduleLabel(rule.schedule),
+    t('rules.siteCount', { n: rule.domains.length })
+  ].join(' · ');
+}
+
+// Reports a rule change inline, noting when the change waits for the delay.
+function ruleFeedback(ruleId) {
+  const waiting = typeof ruleId === 'string'
+    && (state.pendingRuleChanges ?? []).some((change) => change.ruleId === ruleId);
+  element('rules-feedback').textContent = waiting ? t('rules.changeWaiting') : t('rules.saved');
+}
+
+function ruleAttempt(action, ruleId = null) {
+  try {
+    applyState(action());
+    ruleFeedback(ruleId);
+    return true;
+  } catch (error) {
+    element('rules-feedback').textContent = translateError(error.message);
+    return false;
+  }
+}
+
+function renderRules() {
+  const activeIds = new Set(activeBlockRules(state).map((entry) => entry.rule.id));
+  const pending = state.pendingRuleChanges ?? [];
+  element('rules-empty').hidden = state.blockRules.length > 0;
+  element('rule-list').replaceChildren(...state.blockRules.map((rule) => {
+    const deleting = pending.find((change) => change.ruleId === rule.id && change.change.type === 'delete');
+    return h('li', { class: 'rule' },
+      h('input', {
+        type: 'checkbox',
+        checked: rule.enabled,
+        'aria-label': t('rules.enable', { name: rule.name }),
+        onchange: (event) => ruleAttempt(() => setBlockRuleEnabled(state, rule.id, event.target.checked, ctx()), rule.id)
+      }),
+      h('div', { class: 'rule-detail' },
+        h('p', { class: 'strong', text: rule.name + (activeIds.has(rule.id) ? t('rules.activeSuffix') : '') }),
+        h('p', { class: 'muted', text: ruleLabel(rule) }),
+        deleting ? h('p', { class: 'muted', text: t('rules.deleteWaiting', { time: formatTime(deleting.effectiveAt) }) }) : null),
+      h('div', { class: 'task-actions' },
+        h('button', { type: 'button', class: 'text-button', text: t('rules.edit'), onclick: () => editRule(rule) }),
+        h('button', {
+          type: 'button', class: 'text-button', text: t('rules.delete'),
+          onclick: (event) => confirmTwice(event.currentTarget, 'rules.delete',
+            () => ruleAttempt(() => deleteBlockRule(state, rule.id, ctx()), rule.id))
+        })));
+  }));
+  element('pending-rules-empty').hidden = pending.length > 0;
+  element('pending-rule-list').replaceChildren(...pending.map((change) => {
+    const rule = state.blockRules.find((item) => item.id === change.ruleId);
+    const name = rule?.name ?? change.change.rule?.name ?? '';
+    const label = change.change.type === 'delay'
+      ? t('rules.pendingDelay', { delay: delayLabel(change.change.changeDelay) })
+      : change.change.type === 'delete'
+        ? t('rules.pendingDelete', { name })
+        : t('rules.pendingUpdate', { name });
+    return h('li', {},
+      h('p', { class: 'strong', text: label }),
+      h('p', { class: 'muted', text: t('rules.pendingAt', { time: formatTime(change.effectiveAt) }) }),
+      h('div', { class: 'task-actions' },
+        h('button', {
+          type: 'button', class: 'text-button', text: t('rules.cancelChange'),
+          onclick: () => attempt(() => cancelPendingRuleChange(state, change.id, ctx()),
+            element('rules-feedback'), t('rules.changeCancelled'))
+        })));
+  }));
+  element('change-delay').value = String(state.settings.changeDelay ?? DEFAULT_CHANGE_DELAY);
+}
+
+function windowRow(window = { days: [1, 2, 3, 4, 5], start: '09:00', end: '17:00' }) {
+  const row = h('div', { class: 'rule-window' },
+    h('div', { class: 'rule-days' }, ...RULE_DAYS.map((day) => h('label', { class: 'check-label' },
+      h('input', { type: 'checkbox', name: 'day', value: String(day), checked: window.days.includes(day) }),
+      h('span', { text: dayName(day) })))),
+    h('div', { class: 'field-row' },
+      h('div', {},
+        h('label', { text: t('rules.start') }),
+        h('input', { type: 'time', name: 'start', value: window.start, 'aria-label': t('rules.start') })),
+      h('div', {},
+        h('label', { text: t('rules.end') }),
+        h('input', { type: 'time', name: 'end', value: window.end, 'aria-label': t('rules.end') }))),
+    h('button', { type: 'button', class: 'text-button', text: t('rules.removeWindow'), onclick: () => row.remove() }));
+  return row;
+}
+
+function readWindows() {
+  return [...element('rule-windows').querySelectorAll('.rule-window')].map((node) => ({
+    days: [...node.querySelectorAll('input[name="day"]:checked')].map((input) => Number(input.value)),
+    start: node.querySelector('input[name="start"]').value,
+    end: node.querySelector('input[name="end"]').value
+  }));
+}
+
+function updateRuleFormMode() {
+  element('rule-schedule-fields').hidden = ruleForm.elements.schedule.value !== 'scheduled';
+  element('rule-pause-fields').hidden = ruleForm.elements.strength.value !== 'pause';
+}
+
+function resetRuleForm() {
+  const fields = ruleForm.elements;
+  fields.id.value = '';
+  fields.name.value = '';
+  // The focus distraction list is the starting choice (BLK-01).
+  fields.domains.value = state.preferences.domains.join('\n');
+  fields.schedule.value = 'always';
+  fields.strength.value = 'block';
+  fields.countdownSeconds.value = COUNTDOWN_SECONDS.default;
+  fields.passMinutes.value = PASS_MINUTES.default;
+  element('rule-windows').replaceChildren();
+  element('rule-form-title').textContent = t('rules.newRule');
+  element('rule-cancel').hidden = true;
+  updateRuleFormMode();
+}
+
+function editRule(rule) {
+  const fields = ruleForm.elements;
+  fields.id.value = rule.id;
+  fields.name.value = rule.name;
+  fields.domains.value = rule.domains.join('\n');
+  fields.schedule.value = rule.schedule.type;
+  const windows = rule.schedule.type === 'scheduled' ? rule.schedule.windows : [];
+  element('rule-windows').replaceChildren(...(windows.length ? windows.map((window) => windowRow(window)) : [windowRow()]));
+  fields.strength.value = rule.strength;
+  fields.countdownSeconds.value = rule.countdownSeconds;
+  fields.passMinutes.value = rule.passMinutes;
+  element('rule-form-title').textContent = t('rules.editRule');
+  element('rule-cancel').hidden = false;
+  updateRuleFormMode();
+  ruleForm.scrollIntoView({ block: 'nearest' });
+  fields.name.focus();
+}
+
+
+function wireRules() {
+  ruleForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const id = ruleForm.elements.id.value || null;
+    const known = new Set(state.blockRules.map((rule) => rule.id));
+    try {
+      applyState(saveBlockRule(state, id, {
+        name: ruleForm.elements.name.value,
+        domains: ruleForm.elements.domains.value,
+        schedule: ruleForm.elements.schedule.value === 'scheduled'
+          ? { type: 'scheduled', windows: readWindows() }
+          : { type: 'always' },
+        strength: ruleForm.elements.strength.value,
+        countdownSeconds: ruleForm.elements.countdownSeconds.value,
+        passMinutes: ruleForm.elements.passMinutes.value
+      }, ctx()));
+      ruleFeedback(id ?? state.blockRules.find((rule) => !known.has(rule.id))?.id ?? null);
+      resetRuleForm();
+    } catch (error) {
+      element('rules-feedback').textContent = translateError(error.message);
+    }
+  });
+  element('rule-cancel').addEventListener('click', () => {
+    resetRuleForm();
+    element('rules-feedback').textContent = '';
+  });
+  element('rule-use-focus').addEventListener('click', () => {
+    ruleForm.elements.domains.value = state.preferences.domains.join('\n');
+  });
+  for (const input of ruleForm.querySelectorAll('input[name="schedule"], select[name="strength"]')) {
+    input.addEventListener('change', updateRuleFormMode);
+  }
+  element('rule-add-window').addEventListener('click', () => {
+    element('rule-windows').append(windowRow());
+  });
+  element('change-delay').addEventListener('change', (event) => {
+    try {
+      const next = setChangeDelay(state, event.target.value, ctx());
+      const waiting = (next.pendingRuleChanges ?? []).some((change) => change.change.type === 'delay');
+      applyState(next);
+      element('rules-feedback').textContent = waiting
+        ? t('rules.delayWaiting', { delay: delayLabel(event.target.value) })
+        : t('rules.saved');
+    } catch (error) {
+      element('rules-feedback').textContent = translateError(error.message);
+      renderRules();
+    }
+  });
+  resetRuleForm();
+}
+
+// ---------------------------------------------------------------------------
 // Settings
 
 function formatValue(field, value) {
@@ -727,6 +949,7 @@ function render() {
   if (currentView === 'review') renderReview();
   renderSettingsLists();
   renderCoverage();
+  renderRules();
   renderTimer(now.getTime());
   syncChrome();
   scheduleReminders(now);
@@ -1014,6 +1237,7 @@ function wireSettings() {
     // Messages left by the previous language would now be mixed in; clear them.
     for (const node of document.querySelectorAll('.feedback')) node.textContent = '';
     sectionCache.clear();
+    resetRuleForm();
     render();
     if (currentView === 'task') renderDetail(false);
     if (currentView === 'settings') refreshNotifications().catch(reportError);
@@ -1035,19 +1259,23 @@ async function boot() {
   wireToday();
   wireDetail();
   wireReview();
+  wireRules();
   wireSettings();
   window.addEventListener('hashchange', navigate);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      checkRuleChanges();
       render();
       checkReminders();
     }
   });
   navigate();
   render();
+  checkRuleChanges();
   checkReminders();
   setInterval(() => {
     tick += 1;
+    checkRuleChanges();
     if (planningDay(state) !== currentDay) render();
     else renderTimer();
     if (tick % 15 === 0) checkReminders();

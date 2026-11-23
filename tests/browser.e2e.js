@@ -157,11 +157,54 @@ test('the interface switches between English and Vietnamese and keeps the choice
   await page.getByText('0 of 1 complete').waitFor();
 });
 
+test('a block rule is created in Settings, keeps a weaker edit waiting, and survives a reload', { timeout: 30_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}/#settings`);
+
+  await page.getByLabel('Rule name').fill('Late evening');
+  // BLK-01 validates domain names as in FOC-03, so a link with a path is
+  // rejected (see tests/blockrules.test.js); the field takes plain domains.
+  await page.getByLabel('Sites to block, one domain per line').fill('youtube.com\ninstagram.com');
+  await page.getByRole('radio', { name: 'Scheduled' }).check();
+  await page.getByRole('button', { name: 'Add a time window' }).click();
+  const windows = page.locator('#rule-windows');
+  await windows.getByLabel('Start', { exact: true }).fill('22:00');
+  await windows.getByLabel('End', { exact: true }).fill('02:00');
+  await page.getByLabel('When a listed site opens').selectOption('pause');
+  await page.getByLabel('Countdown (seconds)').fill('20');
+  await page.getByLabel('Pass (minutes)').fill('5');
+  await page.getByRole('button', { name: 'Save rule' }).click();
+  await page.getByText('Rule saved.').waitFor();
+
+  const list = page.locator('#rule-list');
+  await list.getByText('Late evening').waitFor();
+  await list.getByText('20-second pause, 5-minute pass', { exact: false }).waitFor();
+  await list.getByText('2 sites').waitFor();
+  await list.getByText('Mon, Tue, Wed, Thu, Fri 22:00', { exact: false }).waitFor();
+
+  await page.reload();
+  await page.locator('#rule-list').getByText('Late evening').waitFor();
+
+  // A shorter countdown protects less, so the edit waits for the change delay (BLK-06).
+  await page.locator('#rule-list').getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.getByLabel('Countdown (seconds)').fill('10');
+  await page.getByRole('button', { name: 'Save rule' }).click();
+  await page.getByText('Saved. This weaker change applies after the delay.').waitFor();
+  await page.locator('#pending-rule-list').getByText('Weaker version of Late evening').waitFor();
+  await page.locator('#rule-list').getByText('20-second pause', { exact: false }).waitFor();
+
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByText('Change cancelled.').waitFor();
+  await page.locator('#pending-rules-empty').waitFor();
+});
+
 test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000 }, async (t) => {
   const token = 'a'.repeat(64);
   let focus = null;
   const reports = [];
-  const server = bridge.createFocusBridge(token, () => focus, (report) => reports.push(report));
+  const server = bridge.createFocusBridge(token, () => ({ focus, plan: bridge.EMPTY_PLAN }), (report) => reports.push(report));
   server.listen(bridge.PORT, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => server.close());
