@@ -133,6 +133,37 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   await other.locator('#planned-list').getByText('Prepare the proposal').waitFor();
 });
 
+test('new tasks open straight to their details from the dialog, quick capture and the title', { timeout: 25_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}`);
+  const detail = page.locator('#task');
+
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Draft the budget');
+  await page.getByRole('button', { name: 'Save and add details' }).click();
+  await page.locator('#detail-title').getByText('Draft the budget').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-input-next');
+
+  await page.getByRole('link', { name: 'Today', exact: true }).click();
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Quick one');
+  await page.getByRole('dialog').getByLabel('Task title').press('Enter');
+  await page.locator('#today-list').getByText('Quick one').waitFor();
+  assert.equal(await detail.isHidden(), true);
+
+  await page.locator('#today-list').getByRole('link', { name: 'Quick one', exact: true }).click();
+  await page.locator('#detail-title').getByText('Quick one').waitFor();
+
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  await page.getByLabel('Quick capture').fill('Call the bank');
+  await page.getByRole('button', { name: 'Capture' }).click();
+  await page.getByRole('link', { name: 'Add details →' }).click();
+  await page.locator('#detail-title').getByText('Call the bank').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'detail-input-next');
+});
+
 test('the interface switches between English and Vietnamese and keeps the choice', { timeout: 25_000 }, async (t) => {
   const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
   t.after(() => app.httpServer.close());

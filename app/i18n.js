@@ -308,6 +308,8 @@ const en = {
   'dialog.addTask': 'Add task',
   'dialog.taskTitle': 'Task title',
   'dialog.saveTask': 'Save task',
+  'dialog.saveDetails': 'Save and add details',
+  'tasks.addDetails': 'Add details →',
   'dialog.missionQuestion': 'What do you want to keep in mind?',
   'dialog.saveMission': 'Save mission',
 
@@ -624,6 +626,8 @@ const vi = {
   'dialog.addTask': 'Thêm công việc',
   'dialog.taskTitle': 'Tên công việc',
   'dialog.saveTask': 'Lưu công việc',
+  'dialog.saveDetails': 'Lưu và thêm chi tiết',
+  'tasks.addDetails': 'Thêm chi tiết →',
   'dialog.missionQuestion': 'Bạn muốn luôn ghi nhớ điều gì?',
   'dialog.saveMission': 'Lưu sứ mệnh',
 

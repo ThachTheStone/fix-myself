@@ -37,6 +37,7 @@ let currentTaskId = null;
 let previousFocusStatus;
 let reviewStart = null;
 let missedCount = 0;
+let focusNextStep = false;
 let tick = 0;
 const sectionCache = new Map();
 const photoUrls = new Map();
@@ -251,7 +252,7 @@ function taskRow(task, list, options = {}) {
   return h('li', { class: 'task' + (task.status === 'canceled' ? ' canceled' : '') },
     done,
     h('div', { class: 'task-detail' },
-      h('p', { class: 'task-title', text: task.title }),
+      h('p', { class: 'task-title' }, h('a', { href: '#task/' + encodeURIComponent(task.id), text: task.title })),
       h('p', { class: 'task-meta', text: options.meta ?? taskMeta(task, options.isNext) })),
     h('div', { class: 'task-actions' }, ...actions));
 }
@@ -753,10 +754,25 @@ function navigate() {
   if (view === 'task') {
     renderDetail(true);
     window.scrollTo(0, 0);
+    if (focusNextStep && !element('detail-body').hidden) detailForm.elements.nextStep.focus();
   }
+  focusNextStep = false;
   if (view === 'review') renderReview();
   if (view === 'settings') refreshPreferences();
   if (view === 'review' || view === 'settings') pullChromeReports().catch(reportError);
+}
+
+// Captures a task and returns its id, or null when validation fails.
+function createTask(fields, feedback, success) {
+  const before = new Set(state.tasks.map((task) => task.id));
+  if (!attempt(() => captureTask(state, fields, ctx()), feedback, success)) return null;
+  return state.tasks.find((task) => !before.has(task.id))?.id ?? null;
+}
+
+// Opens a new task's page with the cursor in Next step, ready for details.
+function openForDetails(id) {
+  focusNextStep = true;
+  location.hash = '#task/' + encodeURIComponent(id);
 }
 
 function showTask() {
@@ -778,13 +794,15 @@ function wireToday() {
   taskForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const { title, plannedDate, deadline, pinned } = taskForm.elements;
-    const saved = attempt(() => captureTask(state, {
+    const id = createTask({
       title: title.value,
       plannedDate: plannedDate.value,
       deadline: fromLocalInput(deadline.value),
       pinned: pinned.checked
-    }, ctx()), element('task-feedback'));
-    if (saved) taskDialog.close();
+    }, element('task-feedback'));
+    if (!id) return;
+    taskDialog.close();
+    if (event.submitter?.value === 'details') openForDetails(id);
   });
   element('edit-mission').addEventListener('click', () => {
     missionForm.elements.mission.value = state.mission;
@@ -804,7 +822,13 @@ function wireToday() {
   element('capture-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const input = event.target.elements.title;
-    if (attempt(() => captureTask(state, { title: input.value }, ctx()), element('capture-feedback'), t('tasks.captured'))) {
+    const feedback = element('capture-feedback');
+    const id = createTask({ title: input.value }, feedback, t('tasks.captured'));
+    if (id) {
+      feedback.append(' ', h('a', {
+        href: '#task/' + encodeURIComponent(id), class: 'text-link', text: t('tasks.addDetails'),
+        onclick: (click) => { click.preventDefault(); openForDetails(id); }
+      }));
       input.value = '';
       input.focus();
     }
