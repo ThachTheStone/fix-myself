@@ -45,6 +45,8 @@ Worker thất bại hai vòng liên tiếp trên cùng một brief thì điều 
 Áp dụng cho mọi worker, kể cả Cline. Brief nhắc lại các quy tắc này.
 - Không dừng, kill hay khởi động lại tiến trình mà mình không tự tạo (`Stop-Process`, `taskkill`, `kill`, kể cả
   `node`, `electron`, Chrome). Cổng bận thì báo lại và bỏ qua test đó.
+  Script giao việc đặt `FIX_MYSELF_WORKER=1` nên test extension Chrome tự bỏ qua, và báo cáo đánh **Fail** ở mục
+  "Process rule" khi log có lệnh dừng tiến trình hoặc một tiến trình Electron, Fix Myself, Chrome hay VS Code biến mất.
 - Chỉ sửa file trong worktree được giao. Không đổi cấu hình git, không push, không rebase, reset hay viết lại commit đã có.
 - Không sửa `SRS.md` hay thêm yêu cầu mới. Câu hỏi về yêu cầu thì dừng và báo lại.
 - Không làm test xanh bằng cách tăng timeout, bỏ assertion hay skip test. Chỉ đổi test khi test sai so với SRS và nêu lý do.

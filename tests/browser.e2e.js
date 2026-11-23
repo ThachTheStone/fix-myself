@@ -231,7 +231,11 @@ test('a block rule is created in Settings, keeps a weaker edit waiting, and surv
   await page.locator('#pending-rules-empty').waitFor();
 });
 
-test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000 }, async (t) => {
+// Worker runs (scripts/dispatch-cline.sh) skip this test: it needs the fixed bridge port, which the user's desktop
+// app may hold, and a worker must never stop that app to free it.
+const workerRun = process.env.FIX_MYSELF_WORKER ? 'worker runs leave port 127.0.0.1:42631 to the desktop app' : false;
+
+test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000, skip: workerRun }, async (t) => {
   const token = 'a'.repeat(64);
   let focus = null;
   const reports = [];
