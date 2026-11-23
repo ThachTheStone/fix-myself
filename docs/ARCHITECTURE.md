@@ -15,17 +15,18 @@
 | Desktop | [desktop/main.cjs](../desktop/main.cjs) quản lý cửa sổ Electron, biểu tượng ở vùng thông báo, tùy chọn chạy nền khi đóng cửa sổ và tùy chọn khởi chạy sau khi đăng nhập Windows. [desktop/preload.cjs](../desktop/preload.cjs) cung cấp API IPC giới hạn cho giao diện. |
 | Kết nối với Chrome | [desktop/focus-bridge.cjs](../desktop/focus-bridge.cjs) cung cấp `GET /v1/focus` và `POST /v1/report` trên `127.0.0.1:42631`. Extension dùng mã ghép nối để đọc phiên hiện tại và gửi báo cáo gồm id profile, tên profile, các ngày Chrome chạy và tổng số lần bị chặn theo tên miền mỗi ngày. Bridge từ chối URL, payload quá 16 KB và dữ liệu sai dạng. Renderer lấy báo cáo qua IPC và lưu trong `state.chrome`, không đưa vào file đồng bộ. |
 | Chrome | [extension/worker.js](../extension/worker.js) đọc và lưu phiên, áp dụng rule Manifest V3 và dọn rule khi hết hạn. [extension/blocked.js](../extension/blocked.js) hiển thị việc tiếp theo và thời gian còn lại. |
+| Lịch chặn và quy tắc | [extension/block-schedule.js](../extension/block-schedule.js) chứa hàm thuần dùng chung cho cả app lẫn extension: `scheduleIntervals` đổi lịch thành khoảng phút trong tuần, `activeRules` chọn quy tắc đang trong khung giờ theo `settings.timeZone`, `effectiveRules` áp các thay đổi đã tới hạn. [app/model.js](../app/model.js) kiểm tra quy tắc và phân loại thay đổi: mạnh lên áp dụng ngay, yếu đi chờ `settings.changeDelay` trong `pendingRuleChanges`. [extension/worker.js](../extension/worker.js) đánh giá lại lịch mỗi 30 giây bằng `chrome.alarms` nên lịch vẫn chạy khi app desktop đóng, và [extension/blocked.js](../extension/blocked.js) xử lý đếm ngược cùng thời gian pass. |
 | Android | [android/](../android/) chứa dự án Capacitor. [capacitor.config.json](../capacitor.config.json) trỏ tới thư mục build `dist/`. APK hiện có trình lập kế hoạch và bộ hẹn giờ cục bộ. |
-| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/i18n.test.js](../tests/i18n.test.js) kiểm tra hai từ điển có cùng khóa và tham số, mọi khóa dùng trong giao diện đều tồn tại. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, đồng bộ file giữa hai profile và extension trong Chromium. |
+| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/i18n.test.js](../tests/i18n.test.js) kiểm tra hai từ điển có cùng khóa và tham số, mọi khóa dùng trong giao diện đều tồn tại. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/blockrules.test.js](../tests/blockrules.test.js) kiểm tra lịch, múi giờ, thay đổi mạnh/yếu và giới hạn quy tắc (BLK-01 đến BLK-07). [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, quy tắc chặn theo lịch (tạo, chờ áp dụng, tải lại), đồng bộ file giữa hai profile và extension trong Chromium. |
 
 ### Luồng Windows đến Chrome
 
 1. Windows gọi app với `--login-launch` khi tùy chọn khởi chạy đã bật. Model dùng `lastLoginDay` để quyết định có tạo phiên tự động trong ngày hay không.
 2. UI tải kế hoạch cục bộ, tìm việc tiếp theo và gửi dữ liệu phiên qua IPC cho Electron.
-3. Chrome kiểm tra định kỳ hoặc khi người dùng bấm **Check connection**. Payload hiện tại gồm `endAt` tính theo mili giây Unix, `domains` và `nextAction`, hoặc `focus: null` khi không có phiên.
-4. Extension lưu phiên trên Chrome, chuyển các tab bị chặn tới màn hình focus và gỡ rule khi hết hạn. Nó tiếp tục dùng phiên đã nhận khi desktop mất kết nối.
+3. Chrome kiểm tra định kỳ hoặc khi người dùng bấm **Check connection**. Payload hiện tại gồm `focus` (`endAt` tính theo mili giây Unix, `domains`, `nextAction`) và `plan` (`rules`, `pendingChanges`, `timeZone`, `mission`, `nextAction`); `focus` là `null` khi không có phiên.
+4. Extension lưu phiên và quy tắc trên Chrome, chuyển các tab bị chặn tới màn hình focus, tự đánh giá lịch chặn mỗi phút và gỡ rule khi hết hạn. Nó tiếp tục dùng dữ liệu đã nhận khi desktop mất kết nối.
 
-Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cục bộ. Extension chỉ cần hạn kết thúc, danh sách tên miền và tiêu đề việc tiếp theo để áp dụng luồng này.
+Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cục bộ. Extension chỉ cần hạn kết thúc, danh sách tên miền, tiêu đề việc tiếp theo, quy tắc chặn, các thay đổi đang chờ và múi giờ kế hoạch để áp dụng luồng này.
 
 ## Trạng thái theo SRS
 
@@ -42,7 +43,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | FOC-05 | Settings hiển thị từng profile Chrome là đang được phủ hoặc không khả dụng dựa trên lần báo cáo gần nhất (quá 2 phút là không khả dụng). |
 | REV-03 | Phần Windows đã làm: số lần bị chặn theo trang, ngày thiếu dữ liệu, so sánh tuần trước khi cả hai tuần đủ dữ liệu. Phần Android usage và ngưỡng hằng ngày chưa làm. |
 | REM-02 trên Windows | Đóng cửa sổ thì app chạy tiếp ở vùng thông báo để nhắc nhở và phiên Chrome tiếp tục. |
-| BLK-01 đến BLK-10 | Chưa làm. Chạy trên Chrome Windows trước: trang Block rules trong Settings, extension tự đánh giá lịch khi app desktop đóng, độ trễ khi nới lỏng quy tắc, và báo cáo pause/pass trong Review. BLK-11 (giới hạn thời gian mỗi ngày, ứng dụng Android) để sau. |
+| BLK-01 đến BLK-09 | Đã làm cho Chrome trên Windows và bản xem trước trên trình duyệt: trang **Block rules** trong Settings tạo, sửa, bật/tắt và xóa quy tắc với lịch Always hoặc Scheduled theo ngày và giờ, mức Block hoặc Pause kèm đếm ngược và thời gian pass. Thay đổi làm yếu chờ theo `settings.changeDelay`, hiện trong danh sách chờ và hủy được; hạ thời gian chờ cũng phải chờ. Extension đánh giá lịch mỗi phút nên quy tắc vẫn hiệu lực khi app đóng, và quy tắc là trường đồng bộ gốc nên giữ nguyên `effectiveAt` khi gộp. Còn lại: BLK-10 (báo cáo pause/pass trong Review), BLK-11 (giới hạn thời gian mỗi ngày, ứng dụng Android) và nghiệm thu trên máy Windows thật. |
 | FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
 
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo
