@@ -301,6 +301,13 @@ async function grantPass(ruleId, host, reason) {
   return { pass, until: pass.until };
 }
 
+// Counts one visit stopped or paused by a block rule (BLK-10). The page asks once
+// per visit, never on a reload, and the worker re-checks which rule covers the site.
+async function recordRuleAttempt(host) {
+  const view = await describe(host);
+  if (view.mode === 'block' || view.mode === 'pause') await recordRuleEvent(view.mode, host);
+}
+
 // What the intervention page shows (BLK-03, BLK-04).
 async function describe(host) {
   const { plan: storedPlan, focus, passes } = await chrome.storage.local.get(['plan', 'focus', 'passes']);
@@ -319,8 +326,6 @@ async function describe(host) {
   }
   const { rules } = effectiveRules(plan.rules, plan.pendingChanges, now);
   const entry = activeRules(rules, now, plan.timeZone).find((item) => item.rule.id === target.ruleId) ?? null;
-  // Focus attempts are counted by recordAttempt; block rules report here (BLK-10).
-  if (target.mode === 'block' || target.mode === 'pause') await recordRuleEvent(target.mode, host);
   return {
     mode: target.mode, host, ruleId: target.ruleId, ruleName: entry?.rule.name ?? '',
     until: entry?.until ?? null, mission: plan.mission, nextAction: plan.nextAction,
@@ -360,6 +365,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   let operation;
   if (message?.type === 'sync') operation = startup;
   if (message?.type === 'attempt' && typeof message.host === 'string') operation = () => recordAttempt(message.host);
+  if (message?.type === 'rule-attempt' && typeof message.host === 'string') operation = () => recordRuleAttempt(message.host);
   if (message?.type === 'intervention' && typeof message.host === 'string') operation = () => describe(message.host);
   if (message?.type === 'show') operation = () => showToday().then(() => null);
   if (message?.type === 'pass' && typeof message.ruleId === 'string' && typeof message.host === 'string') {
