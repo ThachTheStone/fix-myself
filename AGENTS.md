@@ -9,6 +9,8 @@
 3. Đọc [quy trình làm việc](docs/WORKFLOW.md) trước khi sửa, kiểm tra hoặc bàn giao.
 4. Xem trạng thái Git và commit gần nhất. Giữ các thay đổi có sẵn của người dùng và chọn phạm vi phù hợp với yêu cầu đang làm.
 
+Khi chia việc cho worker (Haiku, Sonnet, Cline với DeepSeek) hoặc khi chính bạn là worker, đọc [làm việc nhiều agent](docs/MULTI_AGENT.md) và tuân thủ mục "Quy tắc bắt buộc cho worker".
+
 [README.md](README.md) có lệnh chạy và hướng dẫn cài Chrome, Windows, Android.
 
 ## Những hành vi cần giữ khi sửa code
