@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Focus session · Fix Myself</title>
+  <title>Blocked · Fix Myself</title>
   <link rel="stylesheet" href="styles.css">
   <script type="module" src="blocked.js"></script>
 </head>
@@ -11,12 +11,25 @@
   <main>
     <p class="eyebrow">Fix Myself</p>
     <h1 id="heading">Focus in progress</h1>
+    <p id="rule" class="rule-name" hidden></p>
     <p id="domain" class="muted"></p>
     <p id="time" class="time"></p>
+    <section id="mission" hidden aria-labelledby="mission-label">
+      <h2 id="mission-label" class="eyebrow">Mission</h2>
+      <p id="mission-text"></p>
+    </section>
     <section id="next" hidden aria-labelledby="next-label">
       <h2 id="next-label" class="eyebrow">Next action</h2>
       <p id="task"></p>
     </section>
+    <section id="pause" hidden aria-labelledby="pause-label">
+      <h2 id="pause-label" class="eyebrow">Continue with a pass</h2>
+      <label for="reason">What do you need the site for? (optional)</label>
+      <textarea id="reason" maxlength="200" rows="2"></textarea>
+      <button type="button" id="continue-pass">Continue</button>
+    </section>
+    <p id="feedback" role="alert"></p>
+    <button type="button" class="secondary" id="open-today">Open Today</button>
     <a id="continue" class="button" hidden>Open site</a>
   </main>
 </body>

@@ -356,6 +356,64 @@
         <p id="coverage-empty" class="muted" data-i18n="settings.coverageEmpty">No Chrome profile has checked in yet. Install and pair the extension in each profile you use.</p>
       </section>
 
+      <section class="panel settings-panel" id="block-rules" aria-labelledby="rules-title">
+        <h2 id="rules-title" data-i18n="rules.title">Block rules</h2>
+        <p class="muted" data-i18n="rules.help">Rules keep sites blocked outside focus sessions. Weaker changes wait, so one quick edit cannot unlock a site.</p>
+        <ul id="rule-list" class="compact-list"></ul>
+        <p id="rules-empty" class="muted" data-i18n="rules.empty">No rules yet. Add one to keep distracting sites closed outside focus sessions.</p>
+        <form id="rule-form" class="rule-form">
+          <h3 id="rule-form-title" data-i18n="rules.newRule">New rule</h3>
+          <input type="hidden" id="rule-id" name="id">
+          <label for="rule-name" data-i18n="rules.name">Rule name</label>
+          <input id="rule-name" name="name" maxlength="60" autocomplete="off">
+          <label for="rule-domains" data-i18n="rules.sites">Sites to block, one domain per line</label>
+          <textarea id="rule-domains" name="domains" rows="3" aria-describedby="rule-sites-help"></textarea>
+          <p id="rule-sites-help" class="muted" data-i18n="rules.sitesHelp">Use domain names such as youtube.com; a domain also covers its subdomains. You can add up to 20 rules with 30 sites each.</p>
+          <button type="button" class="button secondary" id="rule-use-focus" data-i18n="rules.useFocusSites">Start from the focus sites</button>
+          <fieldset class="rule-schedule">
+            <legend data-i18n="rules.schedule">Schedule</legend>
+            <label class="check-label"><input type="radio" name="schedule" value="always" checked> <span data-i18n="rules.always">Always</span></label>
+            <label class="check-label"><input type="radio" name="schedule" value="scheduled"> <span data-i18n="rules.scheduled">Scheduled</span></label>
+            <p class="muted" data-i18n="rules.scheduleHelp">Times use the planning time zone. A window that crosses midnight belongs to the day it starts.</p>
+            <div id="rule-schedule-fields" hidden>
+              <div id="rule-windows"></div>
+              <button type="button" class="button secondary" id="rule-add-window" data-i18n="rules.addWindow">Add a time window</button>
+            </div>
+          </fieldset>
+          <label for="rule-strength" data-i18n="rules.strength">When a listed site opens</label>
+          <select id="rule-strength" name="strength">
+            <option value="block" data-i18n="rules.strengthBlock">Block it</option>
+            <option value="pause" data-i18n="rules.strengthPause">Pause, then allow a pass</option>
+          </select>
+          <div class="field-row" id="rule-pause-fields" hidden>
+            <div>
+              <label for="rule-countdown" data-i18n="rules.countdown">Countdown (seconds)</label>
+              <input id="rule-countdown" name="countdownSeconds" type="number" inputmode="numeric" min="5" max="60" value="15">
+            </div>
+            <div>
+              <label for="rule-pass" data-i18n="rules.pass">Pass (minutes)</label>
+              <input id="rule-pass" name="passMinutes" type="number" inputmode="numeric" min="1" max="30" value="10">
+            </div>
+          </div>
+          <div class="button-group">
+            <button type="submit" class="button primary" data-i18n="rules.save">Save rule</button>
+            <button type="button" class="button secondary" id="rule-cancel" hidden data-i18n="rules.cancelEdit">Cancel edit</button>
+          </div>
+          <p id="rules-feedback" class="feedback" role="status"></p>
+        </form>
+        <label for="change-delay" data-i18n="rules.changeDelay">Wait before a weaker change applies</label>
+        <select id="change-delay" name="changeDelay">
+          <option value="0" data-i18n="rules.delayNone">No wait</option>
+          <option value="10" data-i18n="rules.delayTen">10 minutes</option>
+          <option value="60" data-i18n="rules.delayHour">1 hour</option>
+          <option value="next-day" data-i18n="rules.delayNextDay">Start of the next day</option>
+        </select>
+        <p class="muted" data-i18n="rules.changeDelayHelp">A longer wait protects you sooner. A shorter wait also waits for the current delay.</p>
+        <h3 data-i18n="rules.pending">Waiting to apply</h3>
+        <ul id="pending-rule-list" class="compact-list"></ul>
+        <p id="pending-rules-empty" class="muted" data-i18n="rules.pendingEmpty">Nothing is waiting.</p>
+      </section>
+
       <section class="panel settings-panel" aria-labelledby="data-title">
         <h2 id="data-title" data-i18n="settings.data">Your data</h2>
         <p data-i18n="settings.dataHelp">Your plan is stored on this device. It leaves the device only when you download or copy a sync file. Workout photos stay on the device that added them. Chrome receives only the focus end time, blocked domains and the next action title.</p>

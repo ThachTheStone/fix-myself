@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } = require('electr
 const { randomBytes } = require('node:crypto');
 const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
-const { createFocusBridge, PORT } = require('./focus-bridge.cjs');
+const { createFocusBridge, validSnapshot, MAX_PLAN_BYTES, PORT } = require('./focus-bridge.cjs');
 
 const loginFlag = '--login-launch';
 const loginLaunch = process.platform === 'win32' && process.argv.includes(loginFlag);
@@ -12,7 +12,7 @@ const loginItem = {
   args: process.defaultApp ? [resolve(process.argv[1]), loginFlag] : [loginFlag]
 };
 let mainWindow;
-let focus;
+let published;
 let pairingCode;
 let bridge;
 let tray;
@@ -74,7 +74,8 @@ async function openBridge() {
     await writeFile(tokenFile, token, { mode: 0o600, flag: 'wx' });
   }
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid desktop pairing file.');
-  bridge = createFocusBridge(token, () => focus, (report) => chromeReports.set(report.profileId, report));
+  bridge = createFocusBridge(token, () => published ?? undefined,
+    (report) => chromeReports.set(report.profileId, report), showWindow);
   await new Promise((resolveListen, rejectListen) => {
     bridge.once('error', rejectListen);
     bridge.listen(PORT, '127.0.0.1', resolveListen);
@@ -115,19 +116,16 @@ function registerHandlers() {
     fromApp(event);
     showWindow();
   });
-  ipcMain.handle('desktop:focus', (event, snapshot) => {
+  // The planner publishes the focus session and the rule set together. Chrome
+  // keeps them, so rules outlive this window (BLK-07).
+  ipcMain.handle('desktop:plan', (event, snapshot) => {
     fromApp(event);
-    if (snapshot === null) {
-      focus = null;
-      return;
+    const clean = validSnapshot(snapshot);
+    if (!clean) throw new Error('Invalid Chrome plan.');
+    if (Buffer.byteLength(JSON.stringify(clean), 'utf8') > MAX_PLAN_BYTES) {
+      throw new Error('The rule set is too large for Chrome.');
     }
-    const { endAt, domains, nextAction } = snapshot;
-    if (!Number.isSafeInteger(endAt) || !Array.isArray(domains) || domains.length > 30
-      || !domains.every((domain) => typeof domain === 'string' && domain.length <= 253)
-      || !(nextAction === null || (typeof nextAction === 'string' && nextAction.length <= 160))) {
-      throw new Error('Invalid focus session.');
-    }
-    focus = { endAt, domains, nextAction };
+    published = clean;
   });
 }
 

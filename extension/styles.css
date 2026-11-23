@@ -25,4 +25,12 @@ button:disabled { opacity: .65; }
 .time { font-size: 2.6rem; font-weight: 650; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
 #next { margin-top: 18px; padding: 14px 16px; background: #e7efde; border-radius: 10px; }
 #task { overflow-wrap: anywhere; margin-top: 3px; font-weight: 650; }
+.rule-name { margin-top: 6px; font-weight: 650; overflow-wrap: anywhere; }
+#mission { margin-top: 18px; padding: 14px 16px; border: 1px solid #d9dfd4; border-radius: 10px; }
+#mission-text { overflow-wrap: anywhere; margin-top: 3px; }
+#pause { margin-top: 18px; }
+#pause label { display: block; margin-bottom: 6px; font-weight: 650; font-size: .92rem; }
+#pause textarea { width: 100%; margin-bottom: 10px; padding: 8px 10px; border: 1px solid #c7d2c4; border-radius: 8px; font: inherit; resize: vertical; }
+#feedback:not(:empty) { margin-top: 11px; color: #774321; font-size: .9rem; }
+.intervention .secondary { margin-top: 14px; background: #fffef9; color: #183d2f; border-color: #c7d2c4; }
 .intervention .button { margin-top: 12px; }

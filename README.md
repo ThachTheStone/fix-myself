@@ -44,6 +44,14 @@ Pairing uses an authenticated loopback connection. The desktop app shares the ac
 
 Each paired profile reports back the days it was running and a daily count of blocked visits per domain. It sends no URLs, page content or browsing history. **Settings → Pair Chrome** lists each profile as covered or unavailable, and **Review** shows blocked attempts by site, marks days with no report, and compares with the previous week only when both weeks are fully covered. Name a profile in the extension popup so you can tell profiles apart.
 
+## Block rules
+
+**Settings → Block rules** keeps sites closed outside focus sessions. Name a rule, list its sites as domains (one per line, up to 30), and choose a schedule: **Always**, or **Scheduled** with time windows on the days you pick. Times follow the planning time zone, and a window that crosses midnight belongs to the day it starts. Under **When a listed site opens**, **Block it** sends the page straight to the intervention page, while **Pause, then allow a pass** counts down first and then opens a pass for a few minutes.
+
+A weaker change — turning a rule off, removing sites, shortening a window, switching from Block to Pause, or a longer pass — waits for **Wait before a weaker change applies** (10 minutes by default, or up to the start of the next day). The saved rule keeps running, the edit shows under **Waiting to apply**, and **Cancel** drops it. Strengthening changes apply at once, and a longer wait applies immediately while a shorter one also waits.
+
+The extension evaluates the schedules itself on a 30-second alarm, so a rule still applies when the desktop app is closed or Chrome starts without it.
+
 ## Reminders and sync
 
 Each task can remind you before its work blocks and its deadline. Set lead times, the planning time zone and which device receives reminders in **Settings → Planning and reminders**. Due reminders also appear on Today, where you can snooze or dismiss them.
