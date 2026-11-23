@@ -7,6 +7,7 @@
 | Phần | Điểm vào và trách nhiệm |
 |---|---|
 | Giao diện | [index.html](../index.html), [app/main.js](../app/main.js) và [app/styles.css](../app/styles.css). Vite build chung các màn Today, Tasks, chi tiết task (`#task/<id>`), Review và Settings cho desktop, Android và bản xem trước trên trình duyệt. |
+| Ngôn ngữ | [app/i18n.js](../app/i18n.js) chứa từ điển tiếng Anh và tiếng Việt, hàm `t()` (có dạng số ít/số nhiều) và `translateError()` dịch thông báo lỗi tiếng Anh của model theo nội dung, nên [app/model.js](../app/model.js) không phụ thuộc ngôn ngữ. Văn bản tĩnh trong [index.html](../index.html) gắn `data-i18n`, `data-i18n-placeholder`, `data-i18n-aria-label`. Lựa chọn lưu ở khóa riêng `fix-myself:language` trên từng thiết bị, không đi vào file đồng bộ. Lần đầu chạy theo ngôn ngữ hệ thống. |
 | Logic và dữ liệu cục bộ | [app/model.js](../app/model.js) là các hàm thuần cho task (trạng thái, cam kết, subtask, work block, hạn gốc và hạn sửa, timeline), Today (việc tiếp theo, carryover, hạn sắp tới, inbox), focus, nhắc nhở, đồng bộ, review tuần và workout. Trạng thái lưu trong `localStorage` khóa `fix-myself:v1` với `version: 2`; bản v1 được chuyển đổi khi đọc. Ngày kế hoạch theo `settings.timeZone`. Định danh thiết bị nằm ở khóa riêng `fix-myself:device`. |
 | Nhắc nhở | Model dựng lại `reminders` từ task sau mỗi thay đổi: giữ trạng thái snooze khi mốc không đổi, thay mới khi mốc đổi, bỏ khi task hoàn thành, hủy hoặc bị xóa. [app/notify.js](../app/notify.js) dùng Web Notification trên Electron và trình duyệt khi app đang chạy, và `@capacitor/local-notifications` để Android hẹn giờ với hệ điều hành. |
 | Đồng bộ | Mỗi trường đồng bộ có dấu `thời điểm ISO|id thiết bị`. `mergeSync` lấy giá trị mới hơn, ghi xung đột khi cả hai thiết bị sửa cùng trường sau lần gộp trước, và giữ tombstone trong `deleted` để task đã xóa không quay lại. Phương tiện hiện tại là file hoặc dữ liệu dán trong Settings. Focus, nhắc nhở, xung đột và `peers` là dữ liệu riêng từng thiết bị. |
@@ -15,7 +16,7 @@
 | Kết nối với Chrome | [desktop/focus-bridge.cjs](../desktop/focus-bridge.cjs) cung cấp `GET /v1/focus` và `POST /v1/report` trên `127.0.0.1:42631`. Extension dùng mã ghép nối để đọc phiên hiện tại và gửi báo cáo gồm id profile, tên profile, các ngày Chrome chạy và tổng số lần bị chặn theo tên miền mỗi ngày. Bridge từ chối URL, payload quá 16 KB và dữ liệu sai dạng. Renderer lấy báo cáo qua IPC và lưu trong `state.chrome`, không đưa vào file đồng bộ. |
 | Chrome | [extension/worker.js](../extension/worker.js) đọc và lưu phiên, áp dụng rule Manifest V3 và dọn rule khi hết hạn. [extension/blocked.js](../extension/blocked.js) hiển thị việc tiếp theo và thời gian còn lại. |
 | Android | [android/](../android/) chứa dự án Capacitor. [capacitor.config.json](../capacitor.config.json) trỏ tới thư mục build `dist/`. APK hiện có trình lập kế hoạch và bộ hẹn giờ cục bộ. |
-| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, đồng bộ file giữa hai profile và extension trong Chromium. |
+| Kiểm thử | [tests/model.test.js](../tests/model.test.js) kiểm tra lập kế hoạch, focus, chuyển đổi v1, timeline, nhắc nhở (A-07), xung đột và xóa khi đồng bộ (A-10) và REV-01. [tests/i18n.test.js](../tests/i18n.test.js) kiểm tra hai từ điển có cùng khóa và tham số, mọi khóa dùng trong giao diện đều tồn tại. [tests/bridge.test.js](../tests/bridge.test.js) kiểm tra API cục bộ. [tests/browser.e2e.js](../tests/browser.e2e.js) chạy planner, luồng inbox → cam kết → dời work block, đồng bộ file giữa hai profile và extension trong Chromium. |
 
 ### Luồng Windows đến Chrome
 
@@ -35,6 +36,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | REM-01, REM-02 | Đã làm: lead time, snooze, thiết bị nhận mặc định, thay khi mốc đổi, hủy khi hoàn thành, gom nhắc nhở quá hạn và hiển thị trạng thái quyền. Trên Android cần kiểm tra trên máy POCO. |
 | SYS-01, SYS-02 | ID ổn định, múi giờ kế hoạch, gộp theo trường, xung đột và tombstone đã có. Chưa có dịch vụ đồng bộ qua mạng, nên chưa đạt mục tiêu 30 giây của SYS-06. |
 | SYS-05 | Xuất và xóa dữ liệu người dùng tạo đã có. |
+| SYS-08 | Đã làm cho giao diện planner (Today, Tasks, chi tiết, Review, Settings, nhắc nhở). Chưa dịch: tiện ích Chrome, menu khay Windows và nút chọn file do trình duyệt vẽ. |
 | REV-01, REV-04 | Đã làm review giao hàng theo tuần và nhật ký workout có ảnh lưu cục bộ. |
 | REV-02 | Người dùng tự xác nhận kết quả. Phần AI đề xuất chờ AI-01 đến AI-04. |
 | FOC-05 | Settings hiển thị từng profile Chrome là đang được phủ hoặc không khả dụng dựa trên lần báo cáo gần nhất (quá 2 phút là không khả dụng). |

@@ -107,6 +107,7 @@ The app helps one person remember their mission and schedule, turn commitments i
 | SYS-05 | The user shall be able to export and delete user-created records and control usage-data retention. The account and integration screens shall explain which information is stored locally and which is synced. |
 | SYS-06 | Proposed pilot targets are a cached Today view within two seconds of app startup, Today visible within ten seconds of Windows invoking the startup app on the pilot PC, and ordinary updates syncing within 30 seconds when both devices are online. OS scheduling and external service delays shall be measured separately. |
 | SYS-07 | Today and intervention screens shall support keyboard navigation on Windows, screen reader labels on both platforms, and readable text at increased system font sizes. Status indicators shall include usable text or an equivalent accessible label. |
+| SYS-08 | The user shall be able to choose English or Vietnamese for the interface in Settings. The change shall apply immediately without a restart and persist on that device. The first launch shall follow the system language. Dates and times shall use the chosen language. User-entered text shall not be translated. |
 
 ## 9. Acceptance tests
 

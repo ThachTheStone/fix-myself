@@ -24,6 +24,10 @@ VS Code's integrated terminal sets `ELECTRON_RUN_AS_NODE=1`, which stops Electro
 
 On Windows, closing the window keeps Fix Myself running in the notification area so reminders and Chrome blocking continue. Choose **Quit Fix Myself** from the notification area icon to exit, or turn off **Keep running in the notification area** in Settings.
 
+## Language
+
+Choose **English** or **Tiếng Việt** in **Settings → Language**. The change applies immediately and is remembered on that device. On first launch the app follows the system language. The Chrome extension and the Windows notification-area menu are still English only.
+
 ## Windows and Chrome setup
 
 1. In the desktop app, add a task to Today and open **Settings**. Choose your duration and domains. To start focus automatically, enable both **Open Today when I sign in to Windows** and **Start focus on the first sign-in each day**.

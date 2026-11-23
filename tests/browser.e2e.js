@@ -133,6 +133,30 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   await other.locator('#planned-list').getByText('Prepare the proposal').waitFor();
 });
 
+test('the interface switches between English and Vietnamese and keeps the choice', { timeout: 25_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}/#settings`);
+  await page.getByLabel('Display language').selectOption('vi');
+  await page.getByRole('link', { name: 'Hôm nay' }).waitFor();
+  assert.equal(await page.locator('html').getAttribute('lang'), 'vi');
+
+  await page.reload();
+  await page.getByRole('link', { name: 'Hôm nay' }).click();
+  await page.getByRole('button', { name: 'Bắt đầu tập trung' }).waitFor();
+  await page.locator('#today').getByRole('button', { name: '+ Thêm công việc' }).click();
+  await page.getByRole('dialog').getByLabel('Tên công việc').fill('Viết đề cương');
+  await page.getByRole('button', { name: 'Lưu công việc' }).click();
+  await page.getByText('Đã xong 0/1').waitFor();
+  await page.getByRole('link', { name: 'Mở Viết đề cương' }).waitFor();
+
+  await page.getByRole('link', { name: 'Cài đặt' }).click();
+  await page.getByLabel('Ngôn ngữ hiển thị').selectOption('en');
+  await page.getByRole('link', { name: 'Today' }).click();
+  await page.getByText('0 of 1 complete').waitFor();
+});
+
 test('Chromium blocks existing and new tabs, retains the cached session, and releases it on expiry', { timeout: 35_000 }, async (t) => {
   const token = 'a'.repeat(64);
   let focus = null;
