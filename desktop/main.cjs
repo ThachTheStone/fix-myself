@@ -4,6 +4,8 @@ const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { createFocusBridge, validSnapshot, MAX_PLAN_BYTES, PORT } = require('./focus-bridge.cjs');
 const { listOpenApps } = require('./apps.cjs');
+const { createAppGuard } = require('./app-guard.cjs');
+const { startWatcher } = require('./app-watcher.cjs');
 
 const loginFlag = '--login-launch';
 const loginLaunch = process.platform === 'win32' && process.argv.includes(loginFlag);
@@ -20,6 +22,35 @@ let tray;
 let quitting = false;
 let keepRunning = process.platform === 'win32';
 const chromeReports = new Map();
+let appGuard = null;
+
+// Fix Myself's own windows are always allowed (APP-04). Refreshed at most every five seconds.
+let ownPids = { at: 0, pids: new Set([process.pid]) };
+function appPids() {
+  if (Date.now() - ownPids.at > 5000) {
+    ownPids = { at: Date.now(), pids: new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]) };
+  }
+  return ownPids.pids;
+}
+
+function toRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+// Limits apps during a focus session with an app preset (APP-03 to APP-07).
+function createGuard() {
+  if (process.platform !== 'win32' || appGuard) return;
+  appGuard = createAppGuard({
+    startWatcher,
+    ownPids: appPids,
+    onIntervene: (view) => {
+      showWindow();
+      toRenderer('desktop:app-intervention', view);
+    },
+    onEvent: (record) => toRenderer('desktop:app-event', record),
+    onCoverage: (coverage) => toRenderer('desktop:app-coverage', coverage)
+  });
+}
 
 // A small "◒" mark drawn in code so the tray needs no image asset.
 function trayIcon() {
@@ -120,7 +151,23 @@ function registerHandlers() {
   if (process.platform === 'win32') {
     ipcMain.handle('desktop:list-apps', async (event) => {
       fromApp(event);
-      return listOpenApps();
+      // Fix Myself is always allowed, so it is never offered (APP-04).
+      const own = process.execPath.toLowerCase();
+      return (await listOpenApps()).filter((item) => item.path.toLowerCase() !== own);
+    });
+    ipcMain.handle('desktop:app-limit', (event, limit) => {
+      fromApp(event);
+      if (!appGuard.setLimit(limit)) throw new Error('Invalid app limit.');
+    });
+    ipcMain.handle('desktop:app-pass', (event, path, reason) => {
+      fromApp(event);
+      const until = appGuard.grantPass(path, reason);
+      if (until === null) throw new Error('This app no longer offers a pass.');
+      return until;
+    });
+    ipcMain.handle('desktop:app-coverage', (event) => {
+      fromApp(event);
+      return appGuard.coverage();
     });
   }
   // The planner publishes the focus session and the rule set together. Chrome
@@ -176,6 +223,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', showWindow);
   app.whenReady().then(async () => {
     await openBridge().catch((error) => console.error('Chrome pairing unavailable:', error.message));
+    createGuard();
     registerHandlers();
     createWindow();
     createTray();
@@ -184,5 +232,6 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true;
     bridge?.close();
+    appGuard?.stop();
   });
 }

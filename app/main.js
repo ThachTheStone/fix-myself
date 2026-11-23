@@ -4,6 +4,7 @@ import {
   recordChromeReports,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused,
+  appLimitSnapshot, appReview, recordAppEvent,
   markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
   readState, reconcileReminders,
@@ -192,6 +193,7 @@ const platformName = () => desktop ? 'windows' : nativeReminders ? 'android' : '
 
 function syncChrome() {
   if (desktop) desktop.publishPlan({ focus: focusSnapshot(state), plan: planSnapshot(state) }).catch(reportError);
+  publishAppLimit();
 }
 
 // A waiting change becomes real when its moment passes, even if Settings is
@@ -215,9 +217,11 @@ function renderTimer(now = Date.now()) {
   const sessionStatus = active
     ? desktop ? t('focus.inProgress', { coverage }) : t('focus.localRunning')
     : desktop ? '' : t('focus.localOnly');
-  const status = sessionStatus && apps
-    ? `${sessionStatus} ${t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') })}`
-    : sessionStatus;
+  const status = [
+    sessionStatus,
+    sessionStatus && apps ? t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') }) : '',
+    active ? appCoverageText() : ''
+  ].filter(Boolean).join(' ');
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
   if (previousFocusStatus !== active) {
     previousFocusStatus = active;
@@ -527,6 +531,7 @@ function renderReview() {
   renderTasks('missed-list', review.carryovers);
   renderTasks('undated-list', review.undated);
   renderDistractions(end);
+  renderAppReview(end);
 
   const workouts = state.workouts.filter((workout) => workout.date >= reviewStart && workout.date <= end)
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -979,6 +984,110 @@ function wirePresets() {
     }
   });
   resetPresetForm();
+}
+
+
+// ---------------------------------------------------------------------------
+// App limits during focus (APP-03 to APP-07, APP-09). The desktop guard
+// minimizes apps outside the session's preset and asks this window to explain.
+
+const appDialog = element('app-dialog');
+let appCoverageState = { state: 'off', partial: [] };
+let appView = null;
+let appCountdown = null;
+let lastAppLimit;
+
+function publishAppLimit() {
+  if (!desktop?.setAppLimit) return;
+  const limit = appLimitSnapshot(state);
+  const signature = JSON.stringify(limit);
+  if (signature === lastAppLimit) return;
+  lastAppLimit = signature;
+  desktop.setAppLimit(limit).catch(reportError);
+}
+
+function appCoverageText() {
+  if (!state.focus?.apps || !isFocused(state.focus)) return '';
+  if (appCoverageState.state === 'unavailable') return t('apps.coverageOff');
+  if (appCoverageState.partial.length) return t('apps.coveragePartial');
+  return '';
+}
+
+function showAppIntervention(view) {
+  appView = view;
+  clearInterval(appCountdown);
+  element('app-dialog-app').textContent = t('appBlock.app', { app: view.app });
+  element('app-dialog-session').textContent = t('appBlock.session', { preset: view.preset, time: timeOnly.format(new Date(view.endAt)) });
+  element('app-dialog-allowed').textContent = t('appBlock.allowed', { apps: view.allowed.join(', ') });
+  element('app-dialog-next').textContent = view.nextAction ? t('appBlock.next', { next: view.nextAction }) : t('appBlock.noNext');
+  const pause = view.mode === 'pause';
+  element('app-dialog-pause').hidden = !pause;
+  element('app-dialog-feedback').textContent = '';
+  element('app-dialog-reason').value = '';
+  const button = element('app-dialog-continue');
+  button.hidden = !pause;
+  if (pause) {
+    let left = view.countdownSeconds;
+    button.textContent = t('appBlock.continue', { n: view.passMinutes });
+    const tickDown = () => {
+      button.disabled = left > 0;
+      element('app-dialog-countdown').textContent = left > 0 ? t('appBlock.wait', { n: left }) : t('appBlock.ready');
+      if (left <= 0) clearInterval(appCountdown);
+      left -= 1;
+    };
+    tickDown();
+    appCountdown = setInterval(tickDown, 1000);
+  } else {
+    element('app-dialog-countdown').textContent = '';
+    element('app-dialog-allowed').textContent += ' ' + t('appBlock.blocked');
+  }
+  if (!appDialog.open) appDialog.showModal();
+}
+
+function wireAppLimits() {
+  if (!desktop?.onAppIntervention) return;
+  desktop.onAppIntervention((view) => {
+    if (location.hash !== '#today' && location.hash !== '') location.hash = '#today';
+    showAppIntervention(view);
+  });
+  desktop.onAppEvent((record) => {
+    const next = recordAppEvent(state, record);
+    if (next !== state) applyState(next);
+  });
+  desktop.onAppCoverage((coverage) => {
+    appCoverageState = coverage;
+    renderTimer();
+  });
+  desktop.appCoverage().then((coverage) => { appCoverageState = coverage; }).catch(reportError);
+  element('app-dialog-continue').addEventListener('click', async () => {
+    if (!appView) return;
+    try {
+      await desktop.takeAppPass(appView.path, element('app-dialog-reason').value);
+      appDialog.close();
+    } catch (error) {
+      element('app-dialog-feedback').textContent = translateError(error.message);
+    }
+  });
+  appDialog.addEventListener('close', () => {
+    clearInterval(appCountdown);
+    appView = null;
+  });
+}
+
+function renderAppReview(end) {
+  const section = element('app-review');
+  section.hidden = !presetsEnabled();
+  if (section.hidden) return;
+  const review = appReview(state, reviewStart, end, currentDay);
+  element('app-review-empty').hidden = review.byApp.length > 0;
+  element('app-review-list').replaceChildren(...review.byApp.map((item) => h('li', { class: 'task' },
+    h('div', { class: 'task-detail' },
+      h('p', { class: 'task-title', text: item.name }),
+      h('p', { class: 'task-meta', text: t('appReview.counts', { block: item.block, pause: item.pause, pass: item.pass }) })))));
+  element('app-review-reasons-empty').hidden = review.reasons.length > 0;
+  element('app-review-reasons').replaceChildren(...review.reasons.map((item) => h('li', {
+    text: t('appReview.reason', { day: formatDay(item.day), hour: String(item.hour).padStart(2, '0'), app: item.name, reason: item.reason })
+  })));
 }
 
 // ---------------------------------------------------------------------------
@@ -1484,6 +1593,7 @@ async function boot() {
   wireReview();
   wireRules();
   wirePresets();
+  wireAppLimits();
   wireSettings();
   window.addEventListener('hashchange', navigate);
   document.addEventListener('visibilitychange', () => {

@@ -81,6 +81,7 @@ function defaultState() {
     conflicts: [],
     peers: {},
     chrome: { profiles: {} },
+    appActivity: { days: {}, reasons: [] },
     preferences: {
       focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS], keepRunning: true,
       autoAppPreset: null, lastAppPreset: null
@@ -165,6 +166,8 @@ export function migrateState(saved) {
       blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
       pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
       appPresets: Array.isArray(saved.appPresets) ? saved.appPresets : defaults.appPresets,
+      appActivity: saved.appActivity && typeof saved.appActivity.days === 'object' && saved.appActivity.days !== null
+        && Array.isArray(saved.appActivity.reasons) ? saved.appActivity : defaults.appActivity,
       settings,
       preferences: { ...defaults.preferences, ...saved.preferences }
     };
@@ -703,6 +706,84 @@ export function setAutoAppPreset(state, id) {
   const value = id ?? null;
   if ((state.preferences.autoAppPreset ?? null) === value) return state;
   return { ...state, preferences: { ...state.preferences, autoAppPreset: value } };
+}
+
+// What the desktop guard needs to limit apps during the running session
+// (APP-03). Null when no session with a preset is running.
+export function appLimitSnapshot(state, now = new Date()) {
+  const apps = state.focus?.apps;
+  if (!isFocused(state.focus, now.getTime()) || !apps) return null;
+  return {
+    endAt: state.focus.endAt,
+    presetId: apps.presetId ?? null,
+    name: apps.name,
+    apps: apps.apps.map((app) => ({ path: app.path, name: app.name })),
+    strength: apps.strength,
+    countdownSeconds: apps.countdownSeconds,
+    passMinutes: apps.passMinutes,
+    nextAction: nextTask(state, planningDay(state, now))?.title.slice(0, 160) ?? null
+  };
+}
+
+const APP_KINDS = ['block', 'pause', 'pass'];
+const APP_ACTIVITY_DAYS = 35;
+const MAX_APP_REASONS = 20;
+
+function localHour(date, timeZone) {
+  if (!timeZone) return date.getHours();
+  const hour = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hourCycle: 'h23' }).format(date);
+  return Number(hour) % 24;
+}
+
+// Keeps per-day counts of apps the guard stopped, paused or let through, and
+// the reasons given for passes (APP-09). Only the app name, path and time are
+// stored, never window titles. Device-local: it is not part of the sync file.
+export function recordAppEvent(state, record) {
+  if (!record || !APP_KINDS.includes(record.kind) || typeof record.path !== 'string') return state;
+  const at = new Date(record.at);
+  if (Number.isNaN(at.getTime())) return state;
+  const timeZone = state.settings?.timeZone ?? null;
+  const day = localDate(at, timeZone);
+  const hour = String(localHour(at, timeZone));
+  const key = record.path.toLowerCase().slice(0, 260);
+  const activity = state.appActivity ?? { days: {}, reasons: [] };
+  const today = activity.days[day] ?? {};
+  const entry = today[key] ?? { name: '', block: {}, pause: {}, pass: {} };
+  const counts = { ...entry[record.kind], [hour]: (entry[record.kind]?.[hour] ?? 0) + 1 };
+  const nextEntry = { ...entry, name: String(record.name ?? '').slice(0, 80) || entry.name, [record.kind]: counts };
+  const keep = new Set(Object.keys({ ...activity.days, [day]: true }).sort().slice(-APP_ACTIVITY_DAYS));
+  const days = Object.fromEntries(Object.entries({ ...activity.days, [day]: { ...today, [key]: nextEntry } })
+    .filter(([name]) => keep.has(name)));
+  let reasons = activity.reasons.filter((item) => keep.has(item.day));
+  const reason = record.kind === 'pass' && typeof record.reason === 'string' ? record.reason.trim().slice(0, 200) : '';
+  if (reason && reasons.filter((item) => item.day === day).length < MAX_APP_REASONS) {
+    reasons = [...reasons, { day, hour: Number(hour), name: nextEntry.name, reason }];
+  }
+  return { ...state, appActivity: { days, reasons } };
+}
+
+const sumCounts = (counts) => Object.values(counts ?? {}).reduce((total, count) => total + count, 0);
+
+// Review totals per app for the days from startDay to endDay, up to today (APP-09).
+export function appReview(state, startDay, endDay, today) {
+  const activity = state.appActivity ?? { days: {}, reasons: [] };
+  const totals = new Map();
+  const inRange = (day) => day >= startDay && day <= endDay && day <= today;
+  for (const [day, apps] of Object.entries(activity.days)) {
+    if (!inRange(day)) continue;
+    for (const [path, entry] of Object.entries(apps)) {
+      const total = totals.get(path) ?? { path, name: entry.name, block: 0, pause: 0, pass: 0 };
+      for (const kind of APP_KINDS) total[kind] += sumCounts(entry[kind]);
+      if (entry.name) total.name = entry.name;
+      totals.set(path, total);
+    }
+  }
+  const byApp = [...totals.values()]
+    .filter((item) => item.block + item.pause + item.pass > 0)
+    .sort((a, b) => (b.block + b.pause + b.pass) - (a.block + a.pause + a.pass) || a.name.localeCompare(b.name));
+  const reasons = activity.reasons.filter((item) => inRange(item.day))
+    .sort((a, b) => b.day.localeCompare(a.day) || b.hour - a.hour);
+  return { byApp, reasons };
 }
 
 // ---------------------------------------------------------------------------
