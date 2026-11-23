@@ -112,7 +112,7 @@ session keeps a copy of the chosen preset. Presets sync. **Enforcement (hiding o
 - Do not run the Chromium extension test (port 127.0.0.1:42631 may belong to the user's desktop app).
 
 ## Commit
-- Branch: `agent/app-presets`. Base: `1fefc74`. Commit trailer: `Co-Authored-By: Cline (DeepSeek) <noreply@cline.bot>`.
+- Branch: `agent/app-presets`. Base: `13c046a` (the commit the worktree starts from). Commit trailer: `Co-Authored-By: Cline (DeepSeek) <noreply@cline.bot>`.
 - Small commits per step are fine. Do not commit `AGENT_BRIEF.md` or `CLINE_TASK*.md`. Do not push.
 
 ## Hard rules
