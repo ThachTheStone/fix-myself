@@ -78,6 +78,7 @@ function createAppGuard({ startWatcher, ownPids = () => new Set([process.pid]), 
   let expiry = null;
   let passes = new Map();
   let lastAction = new Map();
+  let unminimizable = new Set();
   let current = null; // { path, hwnd, name, mode } of the last intervention
   let coverage = { state: 'off', partial: [] };
 
@@ -98,7 +99,12 @@ function createAppGuard({ startWatcher, ownPids = () => new Set([process.pid]), 
 
   function handle(event) {
     if (event.type === 'minimized') {
-      if (!event.ok && current && current.hwnd === event.hwnd) markPartial(current.name);
+      if (!event.ok) {
+        // Windows refused (for example an app running as administrator). Stop
+        // retrying that window so the dialog and the review are not flooded.
+        unminimizable.add(event.hwnd);
+        markPartial(current?.hwnd === event.hwnd ? current.name : '?');
+      }
       return;
     }
     if (event.type !== 'foreground') return;
@@ -109,11 +115,14 @@ function createAppGuard({ startWatcher, ownPids = () => new Set([process.pid]), 
       markPartial('?');
       return;
     }
+    if (unminimizable.has(event.hwnd)) return;
+    // Minimize every time the app comes back; explain and count it at most once
+    // every few seconds.
+    watcher?.send('min ' + event.hwnd);
     if (time - (lastAction.get(event.hwnd) ?? 0) < REACT_AGAIN_MS) return;
     lastAction.set(event.hwnd, time);
     const name = nameOf(event.path);
-    current = { path: event.path, hwnd: event.hwnd, name, mode: verdict };
-    watcher?.send('min ' + event.hwnd);
+    current = { path: event.path, hwnd: event.hwnd, name, mode: verdict, at: time };
     onEvent?.({ kind: verdict, path: event.path, name, at: new Date(time).toISOString() });
     onIntervene?.({
       mode: verdict,
@@ -169,6 +178,7 @@ function createAppGuard({ startWatcher, ownPids = () => new Set([process.pid]), 
       if (!sameSession) {
         passes = new Map();
         lastAction = new Map();
+        unminimizable = new Set();
         current = null;
       }
       if (!limit) {
@@ -187,6 +197,8 @@ function createAppGuard({ startWatcher, ownPids = () => new Set([process.pid]), 
       if (!limit || limit.strength !== 'pause' || !current || current.mode !== 'pause') return null;
       if (typeof path !== 'string' || path.toLowerCase() !== current.path.toLowerCase()) return null;
       const time = now();
+      // The countdown is enforced here too, not only in the window (APP-05).
+      if (time < current.at + limit.countdownSeconds * 1000 - 500) return null;
       const until = Math.min(time + limit.passMinutes * 60_000, limit.endAt);
       passes.set(path.toLowerCase(), until);
       const clean = typeof reason === 'string' ? reason.trim().slice(0, 200) : '';

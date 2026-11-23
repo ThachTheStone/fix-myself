@@ -69,7 +69,7 @@ test('APP-03: an app outside the preset is minimized once and explained, without
   watcher.emit({ type: 'foreground', hwnd: 11, pid: 50, path: CODE });
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
-  assert.deepEqual(watcher.sent, ['min 22']);
+  assert.deepEqual(watcher.sent, ['min 22', 'min 22'], 'it minimizes every time but explains once');
   assert.equal(interventions.length, 1);
   assert.equal(interventions[0].app, 'Slack');
   assert.deepEqual(interventions[0].allowed, ['VS Code']);
@@ -77,8 +77,16 @@ test('APP-03: an app outside the preset is minimized once and explained, without
   assert.equal(events[0].kind, 'block');
   clock.now += 3500;
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
-  assert.deepEqual(watcher.sent, ['min 22', 'min 22']);
+  assert.deepEqual(watcher.sent, ['min 22', 'min 22', 'min 22']);
+  assert.equal(interventions.length, 2);
+  clock.now += 60_000;
   assert.equal(guard.grantPass(SLACK, 'need it'), null, 'Block offers no pass (APP-05)');
+  // A window Windows refuses to minimize is reported once, not retried (APP-07).
+  watcher.emit({ type: 'minimized', hwnd: 22, ok: false });
+  clock.now += 10_000;
+  watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
+  assert.equal(interventions.length, 2);
+  assert.deepEqual(guard.coverage().partial, ['Slack']);
 });
 
 test('APP-05: a Pause pass lets the app through until it expires and never past the session', () => {
@@ -86,9 +94,11 @@ test('APP-05: a Pause pass lets the app through until it expires and never past 
   guard.setLimit(limitOf({ strength: 'pause', passMinutes: 5 }));
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
   assert.equal(interventions[0].countdownSeconds, 15);
+  assert.equal(guard.grantPass(SLACK, 'too early'), null, 'the countdown is enforced in the main process');
+  clock.now += 15_000;
   assert.equal(guard.grantPass('C:\\Apps\\Other.exe', ''), null);
   const until = guard.grantPass(SLACK, '  reply to the team  ');
-  assert.equal(until, 1_000_000 + 5 * 60_000);
+  assert.equal(until, 1_015_000 + 5 * 60_000);
   assert.equal(watcher.sent.at(-1), 'restore 22');
   assert.deepEqual(events.map((event) => event.kind), ['pause', 'pass']);
   assert.equal(events[1].reason, 'reply to the team');
@@ -99,17 +109,19 @@ test('APP-05: a Pause pass lets the app through until it expires and never past 
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
   assert.equal(interventions.length, 2);
 
-  const short = guardWith({ now: 1_990_000 });
+  const short = guardWith({ now: 1_980_000 });
   short.guard.setLimit(limitOf({ strength: 'pause', passMinutes: 30 }));
   short.watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
+  short.clock.now += 15_000;
   assert.equal(short.guard.grantPass(SLACK, ''), 2_000_000);
 });
 
 test('APP-02: the same session keeps its passes; a new session or no session clears them', () => {
-  const { guard, watcher, interventions } = guardWith();
+  const { guard, watcher, interventions, clock } = guardWith();
   guard.setLimit(limitOf({ strength: 'pause' }));
   watcher.emit({ type: 'foreground', hwnd: 22, pid: 51, path: SLACK });
-  guard.grantPass(SLACK, '');
+  clock.now += 15_000;
+  assert.notEqual(guard.grantPass(SLACK, ''), null);
   guard.setLimit({ ...limitOf({ strength: 'pause' }), nextAction: 'Other' });
   watcher.emit({ type: 'foreground', hwnd: 23, pid: 51, path: SLACK });
   assert.equal(interventions.length, 1);

@@ -123,9 +123,17 @@ function startWatcher({ onEvent, onExit }) {
   });
   child.on('error', () => { if (!stopped) onExit(-1); stopped = true; });
   child.on('exit', (code) => { if (!stopped) onExit(code ?? -1); stopped = true; });
+  // A helper that dies between two commands must not crash the app; its exit
+  // event restarts it.
+  child.stdin.on('error', () => {});
   return {
     send(command) {
-      if (!stopped && child.stdin.writable) child.stdin.write(command + '\n');
+      if (stopped || !child.stdin.writable) return;
+      try {
+        child.stdin.write(command + '\n');
+      } catch {
+        // Reported through the exit event.
+      }
     },
     stop() {
       stopped = true;

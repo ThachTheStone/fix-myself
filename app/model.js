@@ -166,6 +166,8 @@ export function migrateState(saved) {
       blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
       pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
       appPresets: Array.isArray(saved.appPresets) ? saved.appPresets : defaults.appPresets,
+      appActivity: saved.appActivity && typeof saved.appActivity.days === 'object' && saved.appActivity.days !== null
+        && Array.isArray(saved.appActivity.reasons) ? saved.appActivity : defaults.appActivity,
       settings,
       preferences: { ...defaults.preferences, ...saved.preferences }
     };

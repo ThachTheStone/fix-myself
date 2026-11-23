@@ -151,7 +151,9 @@ function registerHandlers() {
   if (process.platform === 'win32') {
     ipcMain.handle('desktop:list-apps', async (event) => {
       fromApp(event);
-      return listOpenApps();
+      // Fix Myself is always allowed, so it is never offered (APP-04).
+      const own = process.execPath.toLowerCase();
+      return (await listOpenApps()).filter((item) => item.path.toLowerCase() !== own);
     });
     ipcMain.handle('desktop:app-limit', (event, limit) => {
       fromApp(event);
