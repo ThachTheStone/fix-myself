@@ -42,6 +42,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | FOC-05 | Settings hiển thị từng profile Chrome là đang được phủ hoặc không khả dụng dựa trên lần báo cáo gần nhất (quá 2 phút là không khả dụng). |
 | REV-03 | Phần Windows đã làm: số lần bị chặn theo trang, ngày thiếu dữ liệu, so sánh tuần trước khi cả hai tuần đủ dữ liệu. Phần Android usage và ngưỡng hằng ngày chưa làm. |
 | REM-02 trên Windows | Đóng cửa sổ thì app chạy tiếp ở vùng thông báo để nhắc nhở và phiên Chrome tiếp tục. |
+| BLK-01 đến BLK-10 | Chưa làm. Chạy trên Chrome Windows trước: trang Block rules trong Settings, extension tự đánh giá lịch khi app desktop đóng, độ trễ khi nới lỏng quy tắc, và báo cáo pause/pass trong Review. BLK-11 (giới hạn thời gian mỗi ngày, ứng dụng Android) để sau. |
 | FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
 
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo

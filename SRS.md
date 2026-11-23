@@ -3,21 +3,22 @@
 
 | Document field | Value |
 |---|---|
-| Version | 0.3 |
+| Version | 0.4 |
 | Status | Draft for implementation |
-| Date | 2026-11-19 |
+| Date | 2026-11-23 |
 | Initial platforms | Windows 11 and privately installed Android |
 | Primary Windows browser | Google Chrome |
 | Android pilot | Xiaomi HyperOS `1.0.17.0.UNLMIXM`. Likely POCO X6 Pro 5G running Android 14, pending confirmation in About phone. |
 
 ## 1. Purpose and scope
 
-The app helps one person remember their mission and schedule, turn commitments into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
+The app helps one person remember their mission and schedule, turn commitments into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. Outside focus, block rules the person sets in advance limit the cues that start unplanned scrolling. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
 
 | Capability | Windows 11 | Android private pilot |
 |---|---|---|
 | Daily planning | Today at sign-in, task inbox, commitments, timeline, and reminders | Today, task inbox, commitments, timeline, and reminders |
-| Focus | First sign-in session and manual sessions. Chrome website blocking ships first. Edge follows in compatibility testing. | Optional participation in a synced desktop session. Native-app blocking is subject to on-device validation. |
+| Focus | First sign-in session and manual sessions. Chrome website blocking ships first. Edge follows in compatibility testing. |
+| Block rules | Scheduled or always-on Pause and Block rules for websites in Chrome | Rules sync to the phone. App rules follow after FOC-07 validation. | Optional participation in a synced desktop session. Native-app blocking is subject to on-device validation. |
 | Distraction reporting | Blocked attempts in enabled Chrome profiles | Estimated foreground time for selected apps, usage alerts, and interruption counts when blocking is active |
 | Integrations | Google Calendar, GitHub issue import, and optional AI planning | Same account, imported tasks, plan, and AI approval flow |
 | Weekly review | Task outcomes, distraction trends, and workout entries | Same review, workout logging, and photo attachment |
@@ -32,6 +33,8 @@ The app helps one person remember their mission and schedule, turn commitments i
 - **Work block** reserves time on the schedule. A task may have several work blocks.
 - **Deadline** is when the outcome is due. It may exist without a work block.
 - **Today** shows the mission, priorities, next action, planned work, approaching deadlines, carryovers, and focus status.
+- **Block rule** is a user-defined list of websites with a schedule and a strength. It applies whether or not a focus session is running.
+- **Pause** is a rule strength that delays a visit and lets the user continue for a limited pass after stating a reason. **Block** allows no way through while the rule is active.
 - **Focus intervention** shows why a selected site or app is blocked, the time remaining, and the next action from Today.
 - **Weekly review** shows delivery, quality review, distraction trends, and workout check-ins.
 
@@ -58,6 +61,24 @@ The app helps one person remember their mission and schedule, turn commitments i
 | FOC-06 | When the phone opts in to desktop focus, it shall apply a synced session until the desktop session's end time. A session received halfway through shall use the remaining time. A session received after expiry shall be skipped. Usage alerts remain independently configurable. |
 | FOC-07 | On the pilot phone, a user-enabled service shall be evaluated for intercepting selected native apps during focus and showing the intervention. Enforcement shall follow user-configured rules and operate independently of the AI. The dialer, emergency functions, and system settings shall be excluded. [Android usage statistics](https://developer.android.com/reference/android/app/usage/UsageStatsManager) · [Android background activity restrictions](https://developer.android.com/guide/components/activities/secure-bal) · [Android restricted settings](https://support.google.com/android/answer/12623953) |
 | FOC-08 | If Android blocking cannot be enabled, loses permission, or fails validation on the pilot build, the phone shall show **Alerts only**. Usage reporting and reminders shall continue where permitted. The Android blocking requirement remains open until the on-device acceptance test passes. |
+
+### Block rules outside focus
+
+Block rules limit the cues that start a habit loop at times the user chooses. They are configured on the **Block rules** page in Settings. Windows Chrome enforces them first. Android app rules are future scope and depend on FOC-07.
+
+| ID | Requirement |
+|---|---|
+| BLK-01 | The user shall create, name, edit, enable, disable, and delete block rules. Each rule shall list websites as domain names that also cover subdomains, and shall have one schedule and one strength. The app shall offer the focus distraction list as starting choices. The app shall validate domains as in FOC-03 and allow up to 20 rules with up to 30 domains each. Unlisted sites shall remain accessible. |
+| BLK-02 | A rule's schedule shall be **Always** or **Scheduled**. A scheduled rule shall have one or more time windows, each with selected days of the week and a start and end time. A window may cross midnight; it belongs to the day it starts. Schedules shall use the planning time zone. |
+| BLK-03 | A **Block** rule shall show the intervention with the rule name, the time the rule stops applying, the mission, and today's next action, with a way to open Today. It shall provide no continue control while the rule applies. |
+| BLK-04 | A **Pause** rule shall show the same intervention with a countdown. After the countdown the user may enter an optional reason and continue. Continuing grants a pass for that site in that browser profile. When the pass expires, the next visit pauses again. The defaults are a 15-second countdown and a 10-minute pass. The user may set the countdown from 5 to 60 seconds and the pass from 1 to 30 minutes for each rule. |
+| BLK-05 | When rules overlap, the strongest applies: an active focus session first, then **Block**, then **Pause**. A focus session shall not start or extend a pass. A pass granted before a focus session shall end when the session starts for sites on the focus list. |
+| BLK-06 | Changes that weaken protection shall take effect after a change delay. They include disabling or deleting a rule, removing a domain, removing or shortening a time window, changing **Block** to **Pause**, lengthening a pass, shortening a countdown, and shortening the delay itself. Changes that strengthen protection shall apply on the next rule check. Settings shall show each pending change with the time it takes effect and let the user cancel it. The user chooses the delay: none, 10 minutes (default), 1 hour, or the start of the next planning day. |
+| BLK-07 | The extension shall store the current rule set and evaluate schedules locally, so rules keep applying while the desktop app is closed or offline. Rule changes shall reach paired profiles on the next check. Tabs already open on a site shall be covered when a rule starts applying. Coverage shall be shown as in FOC-05. The app may stop enforcing only according to the user's rules or a change that has completed its delay. |
+| BLK-08 | Rules shall be part of the synced plan so every device shows the same rules. Rule changes shall merge field by field. A pending weakening change shall keep its original effective time on every device. |
+| BLK-09 | Only the user shall create or change rules, through the Settings page. The AI assistant and imported data shall not create, change, pause, or bypass rules, and the app shall provide no remote unlock. |
+| BLK-10 | The weekly review shall show, separately from focus blocking and for each site, visits stopped by **Block**, pauses, and passes taken, with an hour-of-day breakdown. Reasons entered for passes shall be listed for the user. The extension shall report only daily counts and reasons for listed sites, not URLs, page content, or other browsing. |
+| BLK-11 | Future scope: a daily time limit as a third schedule type, after the extension can measure active time on listed sites; and the same rules for Android apps once FOC-07 passes A-03. |
 
 ## 5. Google Calendar and the AI assistant
 
@@ -123,6 +144,7 @@ The app helps one person remember their mission and schedule, turn commitments i
 | A-08 · GitHub import and sync | Assign yourself an issue in an authorized repository and confirm it appears once on both devices. Import the same URL and verify there is still one task. Schedule the task, close the issue on GitHub, and verify the app flags it while preserving the schedule. Complete the local task and verify the weekly review records it. Remove repository access and verify cached source metadata is removed when the app detects revocation. |
 | A-09 · Review and usage gaps | Confirm task-quality review and add a workout photo. Verify the workout entry syncs while the photo stays local by default. Revoke usage access and verify the affected period appears as incomplete or unavailable. |
 | A-10 · Offline changes | Edit the same task field on both devices while offline, reconnect, and verify the app presents both values. Delete a task on one device and ensure an offline copy cannot restore it on reconnect. |
+| A-11 · Block rules | Create a scheduled **Block** rule and an always-on **Pause** rule. Verify the Block rule applies only in its window, including a window that crosses midnight, and reopens access at its end. On the Pause rule, wait out the countdown, take a pass, and verify the site pauses again when the pass expires. Start a focus session and verify that focus sites are blocked despite a pass. Disable a rule and verify it keeps applying until the change delay ends. Cancel a pending change and verify the rule stays. Close the desktop app and verify the rules still apply. Verify the weekly review shows pauses, passes, and reasons separately from focus blocking. |
 
 ## 10. Implementation sequence and open validation
 
@@ -137,4 +159,5 @@ The app helps one person remember their mission and schedule, turn commitments i
 | Exact Android model and version | Verify **Settings → About phone** on the pilot device. The supplied build is consistent with a POCO X6 Pro 5G on Android 14. [Xiaomi device FAQ](https://www.mi.com/global/support/faq/details/KA-90062/) |
 | Android blocking reliability | Run A-03 on the private install and record the permission, launch path, battery mode, and outcome. |
 | Configurable defaults | The user chooses focus duration, distractions, working hours, calendar sources, GitHub repositories, and reminder device during setup. |
+| Block rule defaults | The 15-second countdown, 10-minute pass, and 10-minute change delay are proposed defaults to adjust after pilot use. |
 | Integration choices to validate | The dedicated Google calendar, assigned-issue auto-import, local-only photos, and pilot performance targets are proposed first-release defaults. |
