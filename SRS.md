@@ -3,7 +3,7 @@
 
 | Document field | Value |
 |---|---|
-| Version | 0.4 |
+| Version | 0.5 |
 | Status | Draft for implementation |
 | Date | 2026-11-23 |
 | Initial platforms | Windows 11 and privately installed Android |
@@ -12,18 +12,19 @@
 
 ## 1. Purpose and scope
 
-The app helps one person remember their mission and schedule, turn commitments into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. Outside focus, block rules the person sets in advance limit the cues that start unplanned scrolling. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
+The app helps one person remember their mission and schedule, turn commitments into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. A session can also allow only the Windows apps the person chose for that work. Outside focus, block rules the person sets in advance limit the cues that start unplanned scrolling. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
 
 | Capability | Windows 11 | Android private pilot |
 |---|---|---|
 | Daily planning | Today at sign-in, task inbox, commitments, timeline, and reminders | Today, task inbox, commitments, timeline, and reminders |
 | Focus | First sign-in session and manual sessions. Chrome website blocking ships first. Edge follows in compatibility testing. |
+| Allowed apps | Optional per-session list of allowed Windows apps, chosen at session start from presets | Not available. Android app interception follows FOC-07. |
 | Block rules | Scheduled or always-on Pause and Block rules for websites in Chrome | Rules sync to the phone. App rules follow after FOC-07 validation. | Optional participation in a synced desktop session. Native-app blocking is subject to on-device validation. |
 | Distraction reporting | Blocked attempts in enabled Chrome profiles | Estimated foreground time for selected apps, usage alerts, and interruption counts when blocking is active |
 | Integrations | Google Calendar, GitHub issue import, and optional AI planning | Same account, imported tasks, plan, and AI approval flow |
 | Weekly review | Task outcomes, distraction trends, and workout entries | Same review, workout logging, and photo attachment |
 
-**Future scope.** iPhone support, additional desktop platforms, native Windows app blocking, Android website blocking, and direct Strava activity display. A public Android release requires its own distribution and permission review.
+**Future scope.** iPhone support, additional desktop platforms, Windows app blocking outside focus sessions, Android website blocking, and direct Strava activity display. A public Android release requires its own distribution and permission review.
 
 ## 2. Terms and key views
 
@@ -35,6 +36,7 @@ The app helps one person remember their mission and schedule, turn commitments i
 - **Today** shows the mission, priorities, next action, planned work, approaching deadlines, carryovers, and focus status.
 - **Block rule** is a user-defined list of websites with a schedule and a strength. It applies whether or not a focus session is running.
 - **Pause** is a rule strength that delays a visit and lets the user continue for a limited pass after stating a reason. **Block** allows no way through while the rule is active.
+- **App preset** is a named list of allowed Windows apps with a strength. Choosing one when a focus session starts limits that session to those apps.
 - **Focus intervention** shows why a selected site or app is blocked, the time remaining, and the next action from Today.
 - **Weekly review** shows delivery, quality review, distraction trends, and workout check-ins.
 
@@ -79,6 +81,23 @@ Block rules limit the cues that start a habit loop at times the user chooses. Th
 | BLK-09 | Only the user shall create or change rules, through the Settings page. The AI assistant and imported data shall not create, change, pause, or bypass rules, and the app shall provide no remote unlock. |
 | BLK-10 | The weekly review shall show, separately from focus blocking and for each site, visits stopped by **Block**, pauses, and passes taken, with an hour-of-day breakdown. Reasons entered for passes shall be listed for the user. The extension shall report only daily counts and reasons for listed sites, not URLs, page content, or other browsing. |
 | BLK-11 | Future scope: a daily time limit as a third schedule type, after the extension can measure active time on listed sites; and the same rules for Android apps once FOC-07 passes A-03. |
+
+### Allowed apps during focus
+
+An app preset limits a focus session to the Windows apps the user chose for that work, for example VS Code and Claude Desktop for a coding session. Presets are optional: a session without one blocks only the selected websites. This section applies to the Windows desktop app.
+
+| ID | Requirement |
+|---|---|
+| APP-01 | The user shall create, name, edit, and delete app presets in Settings. Each preset shall list allowed apps and have one strength, **Block** or **Pause**. The user shall add apps by choosing from apps with an open window or apps in the Start menu, not by typing a program name. The app shall identify an app by its executable path and show its display name and icon. The app shall allow up to 10 presets with up to 30 apps each. |
+| APP-02 | Starting a manual focus session shall let the user choose a preset or **No app limit**, with the last choice preselected. The user shall choose a default preset for automatic sessions, which is **No app limit** until set. The session shall store a copy of the chosen preset when it starts. Editing or deleting a preset shall apply to sessions that start afterwards, and the allowed list of a running session shall not change until it ends, including after a restart on the same day. |
+| APP-03 | During a session with a preset, when a window of an app that is not allowed comes to the foreground, the app shall minimize that window and show the intervention with the preset name, the session end time, the allowed apps, and today's next action, with a way to open Today. The app shall not close, end, or change the blocked app, and shall not block its background work, audio, or notifications. Apps that were already open when the session started shall be covered when they come to the foreground. |
+| APP-04 | Fix Myself and Windows controls shall always be allowed and shall not be listed in presets: the taskbar, Start, search, File Explorer, Settings, Task Manager, the sign-in, lock and security prompts, and accessibility tools such as Narrator, Magnifier, and the on-screen keyboard. Open and save dialogs shown by an allowed app shall be allowed. |
+| APP-05 | With **Block**, the intervention shall provide no continue control until the session ends. With **Pause**, it shall show a countdown; after it the user may enter an optional reason and continue, which grants a pass for that app. When the pass expires, the next time the app comes to the foreground pauses again. Passes shall end when the session ends. Countdown and pass settings shall follow BLK-04. This continue control is an exception to FOC-04 and applies only to apps, never to the session's blocked websites. |
+| APP-06 | A browser shall be treated like any other app. When an allowed Chrome is used, the session's website blocking and block rules shall still apply. |
+| APP-07 | App limits shall need the desktop app to be running. If the app cannot watch the foreground window, for example because a blocked app runs as administrator, Settings and Today shall show that app limits are unavailable or partly covered. Website blocking shall continue unaffected. |
+| APP-08 | Presets shall be part of the synced plan and merge field by field, so every Windows device shows the same presets. An app that is not installed on a device shall be shown as missing there. Only the user shall create or change presets through Settings; the AI assistant shall not create, change, or bypass them, as in BLK-09. |
+| APP-09 | The app shall record, for each app, attempts stopped by **Block**, pauses, and passes taken, with pass reasons, for the weekly review, separately from website blocking. It shall record only the app's display name, executable path, and time, never window titles or content. |
+| APP-10 | Future scope: allowed websites in a preset, app limits outside focus sessions as block rules, and Android app presets once FOC-07 passes A-03. |
 
 ## 5. Google Calendar and the AI assistant
 
@@ -145,6 +164,7 @@ Block rules limit the cues that start a habit loop at times the user chooses. Th
 | A-09 · Review and usage gaps | Confirm task-quality review and add a workout photo. Verify the workout entry syncs while the photo stays local by default. Revoke usage access and verify the affected period appears as incomplete or unavailable. |
 | A-10 · Offline changes | Edit the same task field on both devices while offline, reconnect, and verify the app presents both values. Delete a task on one device and ensure an offline copy cannot restore it on reconnect. |
 | A-11 · Block rules | Create a scheduled **Block** rule and an always-on **Pause** rule. Verify the Block rule applies only in its window, including a window that crosses midnight, and reopens access at its end. On the Pause rule, wait out the countdown, take a pass, and verify the site pauses again when the pass expires. Start a focus session and verify that focus sites are blocked despite a pass. Disable a rule and verify it keeps applying until the change delay ends. Cancel a pending change and verify the rule stays. Close the desktop app and verify the rules still apply. Verify the weekly review shows pauses, passes, and reasons separately from focus blocking. |
+| A-12 · Allowed apps | Create a **Block** preset allowing VS Code and Claude Desktop and start a manual session with it. Verify both apps work, and that bringing another app to the front, including one opened before the session, minimizes it and shows the intervention without closing it. Verify Explorer, Settings, Task Manager and open and save dialogs stay usable. Edit the preset during the session and verify the running session keeps its list; restart the app and verify the same. Repeat with **Pause**: wait out the countdown, take a pass, and verify the app pauses again when the pass expires and that blocked websites still offer no continue. Run a blocked app as administrator and verify partial coverage is shown. |
 
 ## 10. Implementation sequence and open validation
 
@@ -159,5 +179,6 @@ Block rules limit the cues that start a habit loop at times the user chooses. Th
 | Exact Android model and version | Verify **Settings → About phone** on the pilot device. The supplied build is consistent with a POCO X6 Pro 5G on Android 14. [Xiaomi device FAQ](https://www.mi.com/global/support/faq/details/KA-90062/) |
 | Android blocking reliability | Run A-03 on the private install and record the permission, launch path, battery mode, and outcome. |
 | Configurable defaults | The user chooses focus duration, distractions, working hours, calendar sources, GitHub repositories, and reminder device during setup. |
+| App limit detection | Validate foreground-window detection and minimizing on the pilot PC, in the Electron app with a native helper or in the planned .NET app, including apps running as administrator and full-screen apps. |
 | Block rule defaults | The 15-second countdown, 10-minute pass, and 10-minute change delay are proposed defaults to adjust after pilot use. |
 | Integration choices to validate | The dedicated Google calendar, assigned-issue auto-import, local-only photos, and pilot performance targets are proposed first-release defaults. |

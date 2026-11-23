@@ -44,6 +44,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | REV-03 | Phần Windows đã làm: số lần bị chặn theo trang, ngày thiếu dữ liệu, so sánh tuần trước khi cả hai tuần đủ dữ liệu. Phần Android usage và ngưỡng hằng ngày chưa làm. |
 | REM-02 trên Windows | Đóng cửa sổ thì app chạy tiếp ở vùng thông báo để nhắc nhở và phiên Chrome tiếp tục. |
 | BLK-01 đến BLK-09 | Đã làm cho Chrome trên Windows và bản xem trước trên trình duyệt: trang **Block rules** trong Settings tạo, sửa, bật/tắt và xóa quy tắc với lịch Always hoặc Scheduled theo ngày và giờ, mức Block hoặc Pause kèm đếm ngược và thời gian pass. Thay đổi làm yếu chờ theo `settings.changeDelay`, hiện trong danh sách chờ và hủy được; hạ thời gian chờ cũng phải chờ. Extension đánh giá lịch mỗi phút nên quy tắc vẫn hiệu lực khi app đóng, và quy tắc là trường đồng bộ gốc nên giữ nguyên `effectiveAt` khi gộp. Còn lại: BLK-10 (báo cáo pause/pass trong Review), BLK-11 (giới hạn thời gian mỗi ngày, ứng dụng Android) và nghiệm thu trên máy Windows thật. |
+| APP-01 đến APP-10 | Chưa làm. Cần một helper native để theo dõi cửa sổ đang ở phía trước và thu nhỏ app không được phép; đánh giá làm trong Electron hay đợi bản .NET (mục "App limit detection" trong SRS). |
 | FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
 
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo
