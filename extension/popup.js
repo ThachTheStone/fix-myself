@@ -10,10 +10,12 @@ async function send(message) {
   try {
     const { result, error } = await chrome.runtime.sendMessage(message);
     if (error) throw new Error(error);
+    const covering = result.coverage?.length ?? 0;
+    const suffix = covering ? ` ${covering} site${covering === 1 ? '' : 's'} blocked now.` : '';
     form.hidden = result.connected || Boolean(result.focus);
-    if (result.focus) status.textContent = result.connected ? 'Focus is active.' : 'Using the saved focus session.';
-    else if (result.connected) status.textContent = 'Paired. No active focus session.';
-    else if (result.paired) status.textContent = 'Open Fix Myself to reconnect.';
+    if (result.focus) status.textContent = (result.connected ? 'Focus is active.' : 'Using the saved focus session.') + suffix;
+    else if (result.connected) status.textContent = 'Paired. No active focus session.' + suffix;
+    else if (result.paired) status.textContent = 'Using the saved rules. Open Fix Myself to reconnect.';
     else status.textContent = 'Open Fix Myself → Settings → Pair Chrome.';
   } catch (error) {
     feedback.textContent = error.message;

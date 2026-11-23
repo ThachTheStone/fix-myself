@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Fix Myself Focus",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minimum_chrome_version": "120",
-  "description": "Show your next planned task when a focus session blocks a site.",
+  "description": "Keep your next planned task in view and block the sites your rules cover.",
   "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "worker.js", "type": "module" },
