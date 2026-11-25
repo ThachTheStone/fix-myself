@@ -526,3 +526,40 @@ test('a focus session works on a chosen task, pauses, ends with sites still bloc
   await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
   await page.getByText('Focus time:', { exact: false }).waitFor();
 });
+
+test('a strict work block holds the session, refuses completion with open subtasks, and offers an emergency exit (WB-01 to WB-04)', { timeout: 40_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}`);
+
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Write the report');
+  await page.getByRole('dialog').getByLabel('Task title').press('Enter');
+  await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
+
+  const detail = page.locator('#task');
+  await detail.getByLabel('New subtask').fill('Draft the summary');
+  await detail.getByRole('button', { name: 'Add', exact: true }).click();
+  await detail.getByText('Draft the summary').waitFor();
+
+  const now = new Date();
+  await detail.getByLabel('Start', { exact: true }).fill(localInput(new Date(now.getTime() - 60_000)));
+  await detail.getByLabel('End', { exact: true }).fill(localInput(new Date(now.getTime() + 30 * 60_000)));
+  await detail.getByLabel('Strict: hold me on this task until it is done').check();
+  await page.getByRole('button', { name: 'Add work block' }).click();
+  await page.getByText('Work block added.').waitFor();
+  await page.reload();
+
+  await page.goto(page.url().split('#')[0] + '#today');
+  await page.getByText('Strict block: Write the report', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Pause' }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'End session' }).isVisible(), false);
+
+  await page.getByRole('checkbox', { name: 'Complete Write the report' }).click();
+  await page.getByText('Tick every subtask before completing this task.').waitFor();
+
+  await page.getByRole('button', { name: 'Emergency exit' }).click();
+  await page.getByText('You can exit in', { exact: false }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Exit strict block' }).isDisabled(), true);
+});

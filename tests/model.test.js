@@ -455,3 +455,298 @@ test('focus segments sync by id and respect deleted tasks', () => {
     assert.throws(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')), /invalid focus record/);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Strict work blocks (WB-01 to WB-04)
+import {
+  applyPendingBlockChanges, cancelPendingBlockChange, cancelStrictExit, exitStrictHold, requestStrictExit,
+  strictReview, tickStrict, STRICT_OUTCOMES
+} from '../app/model.js';
+
+const T0 = '2026-11-19T09:00:00Z';
+const BLOCK = { id: 'blk', start: '2026-11-19T10:00:00.000Z', end: '2026-11-19T10:30:00.000Z', strict: true };
+
+function strictTask(extra = {}, state = fresh()) {
+  const made = captureTask(state, {
+    title: 'Write report', subtasks: [{ id: 's1', title: 'Draft', done: false }], workBlocks: [BLOCK], ...extra
+  }, ctx(T0));
+  return { state: made, id: made.tasks[0].id };
+}
+
+const blockOf = (state) => state.tasks[0].workBlocks[0];
+const tickedDone = [{ id: 's1', title: 'Draft', done: true }];
+
+test('WB-01: strict needs subtasks or criteria and an upcoming block', () => {
+  assert.throws(() => captureTask(fresh(), { title: 'x', workBlocks: [BLOCK] }, ctx(T0)),
+    /Add subtasks or completion criteria/);
+  const ok = captureTask(fresh(), { title: 'x', criteria: 'Done when sent', workBlocks: [BLOCK] }, ctx(T0));
+  assert.equal(ok.tasks[0].workBlocks[0].strict, true);
+  const { state, id } = strictTask();
+  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => captureTask(fresh(), { title: 'x', criteria: 'c', workBlocks: [BLOCK] }, ctx('2026-11-19T11:00:00Z')),
+    /Only upcoming work blocks can be strict/);
+  const plain = captureTask(fresh(), { title: 'y', criteria: 'c', workBlocks: [{ ...BLOCK, strict: false }] }, ctx(T0));
+  assert.throws(() => saveTask(plain, plain.tasks[0].id, { workBlocks: [BLOCK] }, ctx('2026-11-19T11:00:00Z')),
+    /Only upcoming work blocks can be strict/);
+});
+
+test('WB-01: loosening a strict block waits for the change delay', () => {
+  const { state, id } = strictTask();
+  const edits = {
+    unmark: [{ ...BLOCK, strict: false }],
+    shorten: [{ ...BLOCK, end: '2026-11-19T10:20:00Z' }],
+    later: [{ ...BLOCK, start: '2026-11-19T10:05:00Z', end: '2026-11-19T10:35:00Z' }],
+    remove: []
+  };
+  for (const [name, workBlocks] of Object.entries(edits)) {
+    const next = saveTask(state, id, { workBlocks }, ctx(T0));
+    assert.deepEqual(blockOf(next), BLOCK, name);
+    assert.equal(next.pendingBlockChanges.length, 1, name);
+    assert.equal(next.pendingBlockChanges[0].effectiveAt, '2026-11-19T09:10:00.000Z', name);
+    assert.equal(next.pendingBlockChanges[0].blockId, 'blk', name);
+    assert.equal(next.pendingBlockChanges[0].block?.end ?? null, workBlocks[0] ? new Date(workBlocks[0].end).toISOString() : null, name);
+  }
+  // Starting earlier while keeping the end still covers the block, so it applies at once.
+  const earlier = saveTask(state, id, { workBlocks: [{ ...BLOCK, start: '2026-11-19T09:50:00Z' }] }, ctx(T0));
+  assert.equal(blockOf(earlier).start, '2026-11-19T09:50:00.000Z');
+  assert.equal(earlier.pendingBlockChanges.length, 0);
+  // Moving earlier at the same length ends the hold earlier; moving it into the past would skip it. Both wait.
+  for (const moved of [{ start: '2026-11-19T09:50:00Z', end: '2026-11-19T10:20:00Z' },
+    { start: '2026-11-19T05:00:00Z', end: '2026-11-19T05:30:00Z' }]) {
+    const next = saveTask(state, id, { workBlocks: [{ ...BLOCK, ...moved }] }, ctx(T0));
+    assert.deepEqual(blockOf(next), BLOCK);
+    assert.equal(next.pendingBlockChanges.length, 1);
+  }
+  const longer = saveTask(state, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T10:45:00Z' }] }, ctx(T0));
+  assert.equal(blockOf(longer).end, '2026-11-19T10:45:00.000Z');
+  assert.equal(longer.pendingBlockChanges.length, 0);
+
+  const instant = { ...state, settings: { ...state.settings, changeDelay: 0 } };
+  const gone = saveTask(instant, id, { workBlocks: [] }, ctx(T0));
+  assert.equal(gone.tasks[0].workBlocks.length, 0);
+  assert.equal(gone.pendingBlockChanges.length, 0);
+
+  const mixed = saveTask(state, id, { title: 'Renamed', workBlocks: [{ ...BLOCK, strict: false }] }, ctx(T0));
+  assert.equal(mixed.tasks[0].title, 'Renamed');
+  assert.equal(blockOf(mixed).strict, true);
+  assert.equal(mixed.pendingBlockChanges.length, 1);
+  // A newer weakening replaces the earlier one for the same block.
+  const again = saveTask(mixed, id, { workBlocks: [] }, ctx('2026-11-19T09:02:00Z'));
+  assert.equal(again.pendingBlockChanges.length, 1);
+  assert.equal(again.pendingBlockChanges[0].block, null);
+});
+
+test('WB-01: pending block changes apply when due, drop with the task, and can be canceled', () => {
+  const { state, id } = strictTask();
+  const queued = saveTask(state, id, { workBlocks: [{ ...BLOCK, strict: false }] }, ctx(T0));
+  assert.equal(applyPendingBlockChanges(queued, ctx('2026-11-19T09:05:00Z')), queued);
+  const applied = applyPendingBlockChanges(queued, ctx('2026-11-19T09:10:00Z'));
+  assert.equal(blockOf(applied).strict, false);
+  assert.equal(applied.pendingBlockChanges.length, 0);
+
+  const removal = saveTask(state, id, { workBlocks: [] }, ctx(T0));
+  assert.equal(applyPendingBlockChanges(removal, ctx('2026-11-19T09:11:00Z')).tasks[0].workBlocks.length, 0);
+
+  const orphan = { ...queued, tasks: [] };
+  assert.equal(applyPendingBlockChanges(orphan, ctx('2026-11-19T09:11:00Z')).pendingBlockChanges.length, 0);
+
+  const canceled = cancelPendingBlockChange(queued, queued.pendingBlockChanges[0].id, ctx(T0));
+  assert.equal(canceled.pendingBlockChanges.length, 0);
+  assert.equal(cancelPendingBlockChange(canceled, 'nope', ctx(T0)), canceled);
+
+  // A later edit to the same block replaces the waiting change, so the change cannot undo it.
+  const shortened = saveTask(state, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T10:10:00Z' }] }, ctx(T0));
+  const extended = saveTask(shortened, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T11:00:00Z' }] }, ctx('2026-11-19T09:01:00Z'));
+  assert.equal(extended.pendingBlockChanges.length, 0);
+  const later = applyPendingBlockChanges(extended, ctx('2026-11-19T09:20:00Z'));
+  assert.equal(blockOf(later).end, '2026-11-19T11:00:00.000Z');
+  // An edit elsewhere in the task keeps the waiting change.
+  const renamed = saveTask(shortened, id, { title: 'Renamed' }, ctx('2026-11-19T09:01:00Z'));
+  assert.equal(renamed.pendingBlockChanges.length, 1);
+});
+
+test('WB-01: a new block cannot reuse the id of a logged strict block', () => {
+  const { state, id } = strictTask();
+  const logged = { ...state, strictLog: [{ id: 'e1', blockId: 'reused', taskId: id, outcome: 'missed', reason: '', at: T0 }] };
+  const next = saveTask(logged, id, { workBlocks: [BLOCK, { ...BLOCK, id: 'reused', start: '2026-11-19T12:00:00Z', end: '2026-11-19T13:00:00Z' }] }, ctx(T0));
+  assert.equal(next.tasks[0].workBlocks.length, 2);
+  assert.ok(next.tasks[0].workBlocks.every((block) => block.id !== 'reused'));
+});
+
+test('WB-01: a task with an open strict block cannot be deleted or canceled', () => {
+  const { state, id } = strictTask();
+  assert.throws(() => deleteTask(state, id, ctx(T0)), /Remove strict from this task/);
+  assert.throws(() => saveTask(state, id, { status: 'canceled' }, ctx(T0)), /Remove strict from this task/);
+  assert.equal(deleteTask(state, id, ctx('2026-11-19T11:00:00Z')).tasks.length, 0);
+});
+
+test('WB-02: the hold starts a task session, moves a wandering one, and is stable', () => {
+  const { state, id } = strictTask();
+  const now = ctx('2026-11-19T10:00:00Z');
+  assert.equal(tickStrict(state, ctx('2026-11-19T09:30:00Z')), state);
+  const held = tickStrict(state, now);
+  assert.equal(held.focus.taskId, id);
+  assert.equal(held.focus.strict.blockId, 'blk');
+  assert.equal(held.focus.strict.holdUntil, Date.parse(BLOCK.end));
+  assert.equal(held.focus.strict.limit, Date.parse('2026-11-19T11:00:00Z'));
+  assert.equal(held.focus.strict.exitRequestedAt, null);
+  assert.ok(held.focus.endAt >= Date.parse(BLOCK.end) && held.focus.blockUntil >= held.focus.endAt);
+  assert.equal(tickStrict(held, now), held);
+  assert.throws(() => pauseFocus(held, now), /strict block is holding/);
+  assert.throws(() => endFocus(held, now), /strict block is holding/);
+
+  const wandering = startFocus(state, at('2026-11-19T09:56:00Z'));
+  const moved = tickStrict(wandering, now);
+  assert.equal(moved.focusSegments.length, 1);
+  assert.equal(moved.focusSegments[0].taskId, null);
+  assert.equal(moved.focusSegments[0].end, '2026-11-19T10:00:00.000Z');
+  assert.equal(moved.focus.taskId, id);
+  assert.equal(moved.focus.segmentStart, now.now.getTime());
+  assert.equal(moved.focus.sessionId, wandering.focus.sessionId);
+});
+
+test('WB-02: completing during the hold needs every subtask and logs on_time', () => {
+  const { state, id } = strictTask();
+  const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  assert.throws(() => saveTask(held, id, { status: 'completed' }, ctx('2026-11-19T10:10:00Z')),
+    /Tick every subtask/);
+  // Deleting the open subtask (criteria would still satisfy WB-01) must not open a way out.
+  const withCriteria = saveTask(held, id, { criteria: 'Sent' }, ctx('2026-11-19T10:05:00Z'));
+  assert.throws(() => saveTask(withCriteria, id, { subtasks: [] }, ctx('2026-11-19T10:06:00Z')),
+    /Open subtasks cannot be removed/);
+  const added = saveTask(held, id, { subtasks: [...held.tasks[0].subtasks, { id: 's2', title: 'Check', done: false }] },
+    ctx('2026-11-19T10:06:00Z'));
+  assert.equal(added.tasks[0].subtasks.length, 2);
+  let done = saveTask(held, id, { subtasks: tickedDone }, ctx('2026-11-19T10:10:00Z'));
+  done = saveTask(done, id, { status: 'completed' }, ctx('2026-11-19T10:11:00Z'));
+  const ticked = tickStrict(done, ctx('2026-11-19T10:12:00Z'));
+  assert.deepEqual(ticked.strictLog.map((entry) => entry.outcome), ['on_time']);
+  assert.equal(ticked.focus.strict, null);
+  assert.equal(ticked.focus.endedAt, null);
+  assert.equal(tickStrict(ticked, ctx('2026-11-19T10:13:00Z')), ticked);
+});
+
+test('WB-03: the hold extends in 15 minute steps up to the limit', () => {
+  const { state, id } = strictTask();
+  const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const extended = tickStrict(held, ctx('2026-11-19T10:31:00Z'));
+  assert.equal(extended.focus.strict.holdUntil, Date.parse('2026-11-19T10:45:00Z'));
+  assert.equal(extended.focus.endAt, Date.parse('2026-11-19T10:45:00Z'));
+  assert.ok(extended.focus.blockUntil >= extended.focus.endAt);
+  let done = saveTask(extended, id, { subtasks: tickedDone }, ctx('2026-11-19T10:40:00Z'));
+  done = saveTask(done, id, { status: 'completed' }, ctx('2026-11-19T10:41:00Z'));
+  assert.deepEqual(tickStrict(done, ctx('2026-11-19T10:42:00Z')).strictLog.map((entry) => entry.outcome), ['extended']);
+
+  const far = tickStrict(held, ctx('2026-11-19T15:00:00Z'));
+  assert.deepEqual(far.strictLog.map((entry) => entry.outcome), ['limit_reached']);
+  assert.equal(far.focus.strict, null);
+  assert.equal(far.focus.sessionId, held.focus.sessionId);
+  assert.equal(far.focus.taskId, id);
+  assert.equal(tickStrict(far, ctx('2026-11-19T15:01:00Z')), far);
+});
+
+test('WB-04: emergency exit needs the countdown and a reason', () => {
+  const { state } = strictTask();
+  const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const asked = requestStrictExit(held, ctx('2026-11-19T10:05:00Z'));
+  assert.equal(asked.focus.strict.exitRequestedAt, Date.parse('2026-11-19T10:05:00Z'));
+  assert.equal(requestStrictExit(asked, ctx('2026-11-19T10:06:00Z')), asked);
+  assert.throws(() => exitStrictHold(held, 'x', ctx('2026-11-19T10:08:00Z')), /Wait for the countdown/);
+  assert.throws(() => exitStrictHold(asked, 'x', ctx('2026-11-19T10:06:00Z')), /Wait for the countdown/);
+  assert.throws(() => exitStrictHold(asked, '   ', ctx('2026-11-19T10:07:00Z')), /Enter a reason/);
+  assert.throws(() => exitStrictHold(asked, 'a'.repeat(201), ctx('2026-11-19T10:07:00Z')), /Enter a reason/);
+  assert.equal(cancelStrictExit(asked).focus.strict.exitRequestedAt, null);
+  const out = exitStrictHold(asked, '  Family call  ', ctx('2026-11-19T10:07:00Z'));
+  assert.equal(out.focus.strict, null);
+  assert.equal(out.focus.blockUntil, held.focus.blockUntil);
+  assert.equal(out.strictLog[0].outcome, 'exited');
+  assert.equal(out.strictLog[0].reason, 'Family call');
+  assert.equal(tickStrict(out, ctx('2026-11-19T10:08:00Z')), out);
+});
+
+test('WB-03: a task canceled on another device logs canceled', () => {
+  const { state, id } = strictTask();
+  const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const phone = { ...state, settings: { ...state.settings, changeDelay: 0 } };
+  let remote = saveTask(phone, id, { workBlocks: [] }, ctx('2026-11-19T10:02:00Z', 'phone'));
+  remote = saveTask(remote, id, { status: 'canceled' }, ctx('2026-11-19T10:03:00Z', 'phone'));
+  const merged = mergeSync(held, exportSync(remote, { id: 'phone', name: 'Phone' }, at('2026-11-19T10:04:00Z')),
+    ctx('2026-11-19T10:05:00Z', 'pc')).state;
+  const ticked = tickStrict(merged, ctx('2026-11-19T10:06:00Z'));
+  assert.deepEqual(ticked.strictLog.map((entry) => entry.outcome), ['canceled']);
+  assert.equal(ticked.focus.strict, null);
+});
+
+test('WB-03: strict blocks that passed while no tick ran are logged once', () => {
+  const { state, id } = strictTask();
+  const late = tickStrict(state, ctx('2026-11-19T12:00:00Z'));
+  assert.equal(late.strictLog.length, 1);
+  assert.equal(late.strictLog[0].outcome, 'missed');
+  assert.equal(late.strictLog[0].at, BLOCK.end);
+  assert.equal(late.focus, null);
+  assert.equal(tickStrict(late, ctx('2026-11-19T12:01:00Z')), late);
+
+  let done = saveTask(state, id, { subtasks: tickedDone }, ctx('2026-11-19T09:30:00Z'));
+  done = saveTask(done, id, { status: 'completed' }, ctx('2026-11-19T09:40:00Z'));
+  assert.equal(tickStrict(done, ctx('2026-11-19T12:00:00Z')).strictLog[0].outcome, 'on_time');
+});
+
+test('WB sync: strictLog unions by id, pendingBlockChanges is a root field, bad records throw', () => {
+  const { state, id } = strictTask();
+  const entry = (name, taskId, outcome = 'missed') => ({ id: name, blockId: 'blk', taskId, outcome, reason: '', at: '2026-11-19T10:30:00.000Z' });
+  const pc = { ...state, strictLog: [entry('a', id), entry('dup', id)] };
+  const phone0 = { ...state, strictLog: [{ ...entry('dup', id), outcome: 'exited', reason: 'remote' }, entry('b', id)] };
+  const back = mergeSync(pc, exportSync(phone0, { id: 'phone', name: 'Phone' }, at('2026-11-19T11:00:00Z')), ctx('2026-11-19T11:01:00Z', 'pc')).state;
+  assert.deepEqual(back.strictLog.map((item) => item.id).sort(), ['a', 'b', 'dup']);
+  assert.equal(back.strictLog.find((item) => item.id === 'dup').outcome, 'missed');
+
+  const phone = { ...state, settings: { ...state.settings, changeDelay: 0 }, strictLog: [entry('b', id)] };
+  const deletedOnPhone = deleteTask(saveTask(phone, id, { workBlocks: [] }, ctx('2026-11-19T10:40:00Z', 'phone')), id, ctx('2026-11-19T10:41:00Z', 'phone'));
+  const merged = mergeSync(back, exportSync(deletedOnPhone, { id: 'phone', name: 'Phone' }, at('2026-11-19T12:00:00Z')), ctx('2026-11-19T12:01:00Z', 'pc')).state;
+  assert.equal(merged.strictLog.length, 0);
+
+  const queued = saveTask(state, id, { workBlocks: [] }, ctx('2026-11-19T09:01:00Z', 'pc'));
+  const received = mergeSync(fresh(), exportSync(queued, { id: 'pc', name: 'PC' }, at('2026-11-19T09:02:00Z')), ctx('2026-11-19T09:03:00Z', 'phone')).state;
+  assert.equal(received.pendingBlockChanges.length, 1);
+
+  const payload = () => exportSync(queued, { id: 'pc', name: 'PC' }, at('2026-11-19T09:02:00Z'));
+  const old = payload();
+  delete old.data.pendingBlockChanges;
+  delete old.data.strictLog;
+  assert.doesNotThrow(() => mergeSync(fresh(), old, ctx('2026-11-19T09:03:00Z', 'phone')));
+  const change = queued.pendingBlockChanges[0];
+  const badChanges = [
+    { ...change, id: 5 }, { ...change, effectiveAt: 'soon' }, { ...change, createdAt: undefined },
+    { ...change, block: { id: 'blk', start: 'a', end: 'b', strict: true } },
+    { ...change, block: { ...BLOCK, start: BLOCK.end, end: BLOCK.start } }
+  ];
+  for (const bad of badChanges) {
+    const file = payload();
+    file.data.pendingBlockChanges = [bad];
+    assert.throws(() => mergeSync(fresh(), file, ctx('2026-11-19T09:03:00Z', 'phone')), /invalid strict block record/);
+  }
+  const badLogs = [
+    { ...entry('x', id), outcome: 'won' }, { ...entry('x', id), reason: 'r'.repeat(201) },
+    { ...entry('x', id), at: 'never' }, { ...entry('x', id), taskId: 3 }
+  ];
+  for (const bad of badLogs) {
+    const file = payload();
+    file.data.strictLog = [bad];
+    assert.throws(() => mergeSync(fresh(), file, ctx('2026-11-19T09:03:00Z', 'phone')), /invalid strict block record/);
+  }
+});
+
+test('WB-04: strictReview counts outcomes by planning day and lists exits newest first', () => {
+  const { state, id } = strictTask();
+  const entry = (name, outcome, atTime, reason = '') => ({ id: name, blockId: name, taskId: id, outcome, reason, at: atTime });
+  const log = [
+    entry('1', 'on_time', '2026-11-18T10:00:00.000Z'), entry('2', 'exited', '2026-11-19T10:00:00.000Z', 'first'),
+    entry('3', 'exited', '2026-11-19T12:00:00.000Z', 'second'), entry('4', 'missed', '2026-11-20T10:00:00.000Z'),
+    entry('5', 'limit_reached', '2026-11-19T13:00:00.000Z')
+  ];
+  const review = strictReview({ ...state, strictLog: log }, '2026-11-19', '2026-11-19');
+  assert.deepEqual(Object.keys(review.counts), STRICT_OUTCOMES);
+  assert.deepEqual(review.counts, { on_time: 0, extended: 0, limit_reached: 1, exited: 2, canceled: 0, missed: 0 });
+  assert.deepEqual(review.exits.map((item) => item.reason), ['second', 'first']);
+  assert.equal(review.exits[0].title, 'Write report');
+});

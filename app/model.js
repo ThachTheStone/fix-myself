@@ -17,6 +17,11 @@ export const PASS_MINUTES = { min: 1, max: 30, default: 10 };
 export const CHANGE_DELAYS = [0, 10, 60, 'next-day'];
 export const DEFAULT_CHANGE_DELAY = 10;
 export const BLOCK_STRENGTHS = ['block', 'pause'];
+
+// Strict work blocks (WB-01 to WB-04).
+export const STRICT_EXTENSION_MINUTES = 15;
+export const STRICT_EXIT_SECONDS = 120;
+export const STRICT_OUTCOMES = ['on_time', 'extended', 'limit_reached', 'exited', 'canceled', 'missed'];
 const CLOCK_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 // App presets (APP-01, APP-02, APP-08).
@@ -35,7 +40,7 @@ export const TASK_FIELDS = [
 ];
 export const REVIEW_RESULTS = ['unreviewed', 'met', 'partly_met', 'needs_review'];
 export const REVIEW_LABELS = { unreviewed: 'Unreviewed', met: 'Met', partly_met: 'Partly met', needs_review: 'Needs review' };
-const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges', 'appPresets'];
+const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges', 'appPresets', 'pendingBlockChanges'];
 const ACTIVE = new Set(['open', 'in_progress']);
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86_400_000;
@@ -74,7 +79,9 @@ function defaultState() {
     blockRules: [],
     pendingRuleChanges: [],
     appPresets: [],
+    pendingBlockChanges: [],
     focusSegments: [],
+    strictLog: [],
     // Device-local records below this line are not exported for sync.
     focus: null,
     lastLoginDay: null,
@@ -184,6 +191,8 @@ export function migrateState(saved) {
       blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
       pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
       appPresets: Array.isArray(saved.appPresets) ? saved.appPresets : defaults.appPresets,
+      pendingBlockChanges: Array.isArray(saved.pendingBlockChanges) ? saved.pendingBlockChanges : defaults.pendingBlockChanges,
+      strictLog: Array.isArray(saved.strictLog) ? saved.strictLog : defaults.strictLog,
       appActivity: saved.appActivity && typeof saved.appActivity.days === 'object' && saved.appActivity.days !== null
         && Array.isArray(saved.appActivity.reasons) ? saved.appActivity : defaults.appActivity,
       settings,
@@ -316,7 +325,7 @@ function validateChanges(task, changes) {
           const start = isoOrNull(block.start, 'Choose a start time for the work block.');
           const end = isoOrNull(block.end, 'Choose an end time for the work block.');
           if (!start || !end || end <= start) throw new Error('A work block must end after it starts.');
-          return { id: block.id ?? newId(), start, end };
+          return { id: block.id ?? newId(), start, end, strict: Boolean(block.strict) };
         }).sort((a, b) => a.start.localeCompare(b.start));
         break;
       case 'commitment':
@@ -402,6 +411,16 @@ export function activePriorities(state, exceptId) {
   return state.tasks.filter((task) => task.id !== exceptId && task.pinned && isActive(task)).length;
 }
 
+const isOpenStrict = (block, nowMs) => Boolean(block.strict) && Date.parse(block.end) > nowMs;
+
+// Does replacing block `old` with `replacement` (undefined when removed) loosen it?
+// Only a strict block that still covers the old time is as strong: moving a
+// block earlier ends the hold earlier, so it loosens too.
+function weakensBlock(old, replacement) {
+  if (!replacement || !replacement.strict) return true;
+  return Date.parse(replacement.start) > Date.parse(old.start) || Date.parse(replacement.end) < Date.parse(old.end);
+}
+
 export function saveTask(state, id, changes, ctx) {
   const c = context(ctx);
   const existing = id ? state.tasks.find((task) => task.id === id) : null;
@@ -410,6 +429,72 @@ export function saveTask(state, id, changes, ctx) {
   const fields = validateChanges(before, changes);
   const after = { ...before, ...fields };
   if (!existing && !after.title) throw new Error('Enter a task title.');
+
+  const nowMs = c.now.getTime();
+  const holdsTask = state.focus?.strict?.taskId === before.id;
+  if (existing && after.status === 'canceled' && before.status !== 'canceled'
+      && (before.workBlocks.some((block) => isOpenStrict(block, nowMs)) || holdsTask)) {
+    throw new Error('Remove strict from this task’s work blocks first.');
+  }
+  if (existing && after.status === 'completed' && before.status !== 'completed' && holdsTask
+      && after.subtasks.some((subtask) => !subtask.done)) {
+    throw new Error('Tick every subtask before completing this task.');
+  }
+  let queued = null;
+  if (ctx?.applyingPending !== true) {
+    // Removing an open subtask would let the task be completed without doing it.
+    if (existing && holdsTask) {
+      const kept = new Set(after.subtasks.map((subtask) => subtask.id));
+      if (before.subtasks.some((subtask) => !subtask.done && !kept.has(subtask.id))) {
+        throw new Error('Open subtasks cannot be removed during a strict block.');
+      }
+    }
+    // A new block may not reuse the id of a logged strict block or another task's block,
+    // or it would never be held.
+    const taken = new Set([
+      ...(state.strictLog ?? []).map((entry) => entry.blockId),
+      ...state.tasks.filter((task) => task.id !== before.id).flatMap((task) => (task.workBlocks ?? []).map((block) => block.id))
+    ]);
+    const own = new Set(before.workBlocks.map((block) => block.id));
+    after.workBlocks = after.workBlocks.map((block) => (!own.has(block.id) && taken.has(block.id) ? { ...block, id: newId() } : block));
+    const earlier = new Map(before.workBlocks.map((block) => [block.id, block]));
+    for (const block of after.workBlocks) {
+      if (block.strict && !earlier.get(block.id)?.strict && Date.parse(block.end) <= nowMs) {
+        throw new Error('Only upcoming work blocks can be strict.');
+      }
+    }
+    const delay = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
+    if (existing) {
+      // A later edit to a block replaces its waiting change, so a waiting change
+      // never overwrites a newer edit. The new edit is judged again below.
+      const current = state.pendingBlockChanges ?? [];
+      const touched = new Set(before.workBlocks
+        .filter((old) => !same(old, after.workBlocks.find((block) => block.id === old.id)))
+        .map((old) => old.id));
+      let pending = current.filter((change) => !(change.taskId === before.id && touched.has(change.blockId)));
+      let blocks = after.workBlocks;
+      let weakened = false;
+      if (delay !== 0) {
+        for (const old of before.workBlocks) {
+          if (!isOpenStrict(old, nowMs)) continue;
+          const replacement = after.workBlocks.find((block) => block.id === old.id);
+          if (!weakensBlock(old, replacement)) continue;
+          weakened = true;
+          blocks = [...blocks.filter((block) => block.id !== old.id), old];
+          pending = [...pending.filter((change) => change.blockId !== old.id), {
+            id: newId(), taskId: before.id, blockId: old.id, block: replacement ?? null,
+            effectiveAt: delayMoment(state, c, delay), createdAt: c.at
+          }];
+        }
+      }
+      if (weakened) after.workBlocks = blocks.sort((a, b) => a.start.localeCompare(b.start));
+      if (weakened || pending.length !== current.length) queued = pending;
+    }
+    if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))
+        && after.subtasks.length === 0 && !after.criteria) {
+      throw new Error('Add subtasks or completion criteria before making a block strict.');
+    }
+  }
 
   if (!isActive(after)) after.pinned = false;
   if (after.pinned && !before.pinned && activePriorities(state, after.id) >= MAX_PRIORITIES) {
@@ -420,7 +505,9 @@ export function saveTask(state, id, changes, ctx) {
   if (after.deadline && !after.originalDeadline) after.originalDeadline = after.deadline;
 
   const changed = TASK_FIELDS.filter((field) => !same(before[field], after[field]));
-  if (existing && changed.length === 0) return state;
+  if (existing && changed.length === 0) {
+    return queued ? setRoot(state, 'pendingBlockChanges', queued, c) : state;
+  }
   after.stamps = { ...before.stamps };
   after.supersedes = { ...before.supersedes };
   const stamp = stampOf(c);
@@ -437,6 +524,7 @@ export function saveTask(state, id, changes, ctx) {
     ? state.tasks.map((task) => task.id === after.id ? after : task)
     : [...state.tasks, after];
   let next = { ...state, tasks };
+  if (queued) next = setRoot(next, 'pendingBlockChanges', queued, c);
   if (state.nextActionId === after.id && !isActive(after)) next = setRoot(next, 'nextActionId', null, c);
   return reconcileReminders(next, c.now);
 }
@@ -462,13 +550,18 @@ export function addToToday(state, id, ctx) {
 
 export function deleteTask(state, id, ctx) {
   const c = context(ctx);
-  if (!state.tasks.some((task) => task.id === id)) return state;
+  const doomed = state.tasks.find((task) => task.id === id);
+  if (!doomed) return state;
+  if (doomed.workBlocks.some((block) => isOpenStrict(block, c.now.getTime())) || state.focus?.strict?.taskId === id) {
+    throw new Error('Remove strict from this task’s work blocks first.');
+  }
   let next = {
     ...state,
     tasks: state.tasks.filter((task) => task.id !== id),
     deleted: { ...state.deleted, [id]: c.at },
     conflicts: state.conflicts.filter((conflict) => conflict.ref !== id),
-    focusSegments: (state.focusSegments ?? []).filter((segment) => segment.taskId !== id)
+    focusSegments: (state.focusSegments ?? []).filter((segment) => segment.taskId !== id),
+    strictLog: (state.strictLog ?? []).filter((entry) => entry.taskId !== id)
   };
   if (state.focus?.taskId === id) next.focus = { ...state.focus, taskId: null };
   if (state.nextActionId === id) next = setRoot(next, 'nextActionId', null, c);
@@ -671,6 +764,7 @@ function addSegment(state, focus, end, c) {
 export function pauseFocus(state, ctx) {
   const c = context(ctx);
   const focus = state.focus;
+  if (focus?.strict) throw new Error('A strict block is holding this session.');
   if (!isSessionRunning(focus, c.now.getTime()) || focus.segmentStart == null) return state;
   return addSegment(state, focus, c.now.getTime(), c);
 }
@@ -685,6 +779,7 @@ export function resumeFocus(state, ctx) {
 export function endFocus(state, ctx) {
   const c = context(ctx);
   const focus = state.focus;
+  if (focus?.strict) throw new Error('A strict block is holding this session.');
   if (!isSessionRunning(focus, c.now.getTime())) return state;
   const closed = focus.segmentStart == null ? state : addSegment(state, focus, c.now.getTime(), c);
   return { ...closed, focus: { ...closed.focus, segmentStart: null, endedAt: c.now.getTime() } };
@@ -1016,7 +1111,9 @@ export function exportSync(state, device, now = new Date()) {
       blockRules: state.blockRules ?? [],
       pendingRuleChanges: state.pendingRuleChanges ?? [],
       appPresets: state.appPresets ?? [],
+      pendingBlockChanges: state.pendingBlockChanges ?? [],
       focusSegments: state.focusSegments ?? [],
+      strictLog: state.strictLog ?? [],
       stamps: state.stamps,
       supersedes: state.supersedes,
       tasks: state.tasks,
@@ -1061,6 +1158,18 @@ function validatePayload(payload) {
       || !(Date.parse(segment.end) > Date.parse(segment.start)));
     if (bad) throw new Error('The sync file contains an invalid focus record.');
   }
+  const parses = (value) => typeof value === 'string' && !Number.isNaN(Date.parse(value));
+  const badStrict = (list, check) => list !== undefined && (!Array.isArray(list)
+    || list.some((item) => !item || typeof item !== 'object' || !check(item)));
+  const invalidStrict = badStrict(payload.data.pendingBlockChanges, (change) => ['id', 'taskId', 'blockId'].every((key) => typeof change[key] === 'string')
+      && parses(change.effectiveAt) && parses(change.createdAt)
+      && (change.block === null || (change.block && typeof change.block === 'object'
+        && parses(change.block.start) && parses(change.block.end)
+        && Date.parse(change.block.start) < Date.parse(change.block.end))))
+    || badStrict(payload.data.strictLog, (entry) => ['id', 'blockId', 'taskId'].every((key) => typeof entry[key] === 'string')
+      && STRICT_OUTCOMES.includes(entry.outcome) && typeof entry.reason === 'string' && entry.reason.length <= 200
+      && parses(entry.at));
+  if (invalidStrict) throw new Error('The sync file contains an invalid strict block record.');
 }
 
 function mergeFields(local, remote, fields, base, ref, conflicts) {
@@ -1140,6 +1249,7 @@ export function mergeSync(state, payload, ctx) {
     blockRules: state.blockRules ?? [],
     pendingRuleChanges: state.pendingRuleChanges ?? [],
     appPresets: state.appPresets ?? [],
+    pendingBlockChanges: state.pendingBlockChanges ?? [],
     stamps: state.stamps,
     supersedes: state.supersedes
   };
@@ -1160,6 +1270,12 @@ export function mergeSync(state, payload, ctx) {
   }
   const focusSegments = [...segments.values()].filter((segment) => !(segment.taskId && deleted[segment.taskId]));
 
+  const entries = new Map();
+  for (const entry of [...(state.strictLog ?? []), ...(remote.strictLog ?? [])]) {
+    if (!entries.has(entry.id)) entries.set(entry.id, entry);
+  }
+  const strictLog = [...entries.values()].filter((entry) => !deleted[entry.taskId]);
+
   const devices = { ...state.devices };
   for (const [id, device] of Object.entries(remote.devices ?? {})) {
     if (!devices[id] || device.lastSeenAt > devices[id].lastSeenAt) devices[id] = device;
@@ -1173,6 +1289,7 @@ export function mergeSync(state, payload, ctx) {
     ...root,
     tasks,
     focusSegments,
+    strictLog,
     workouts: [...workouts.values()].filter((workout) => !deleted[workout.id]),
     deleted,
     devices,
@@ -1701,4 +1818,182 @@ export function distractionReview(state, startDay, endDay, today) {
     total: sum(current),
     previousTotal: comparable ? sum(previous) : null
   };
+}
+
+// ---------------------------------------------------------------------------
+// Strict work blocks (WB-01 to WB-04)
+
+export function cancelPendingBlockChange(state, id, ctx) {
+  const c = context(ctx);
+  const pending = state.pendingBlockChanges ?? [];
+  if (!pending.some((change) => change.id === id)) return state;
+  return setRoot(state, 'pendingBlockChanges', pending.filter((change) => change.id !== id), c);
+}
+
+// Moves due loosening changes into the task's work blocks.
+export function applyPendingBlockChanges(state, ctx) {
+  const c = context(ctx);
+  const pending = state.pendingBlockChanges ?? [];
+  const nowMs = c.now.getTime();
+  const due = pending.filter((change) => Date.parse(change.effectiveAt) <= nowMs);
+  if (due.length === 0) return state;
+  let next = state;
+  for (const change of due) {
+    const task = next.tasks.find((item) => item.id === change.taskId);
+    if (!task || !task.workBlocks.some((block) => block.id === change.blockId)) continue;
+    const workBlocks = change.block
+      ? task.workBlocks.map((block) => (block.id === change.blockId ? change.block : block))
+      : task.workBlocks.filter((block) => block.id !== change.blockId);
+    try {
+      next = saveTask(next, task.id, { workBlocks }, { now: c.now, device: c.device, applyingPending: true });
+    } catch {
+      // A damaged entry is dropped below instead of failing on every tick.
+    }
+  }
+  const dueIds = new Set(due.map((change) => change.id));
+  return setRoot(next, 'pendingBlockChanges', pending.filter((change) => !dueIds.has(change.id)), c);
+}
+
+const strictEntry = (blockId, taskId, outcome, at, reason = '') => ({ id: newId(), blockId, taskId, outcome, reason, at });
+
+// Starts, extends and ends the hold of a strict work block. Returns the same
+// object when nothing changes.
+export function tickStrict(state, ctx) {
+  const c = context(ctx);
+  const nowMs = c.now.getTime();
+  const logged = new Set((state.strictLog ?? []).map((entry) => entry.blockId));
+  const added = [];
+  const holdBlockId = state.focus?.strict?.blockId;
+  for (const task of state.tasks) {
+    for (const block of task.workBlocks ?? []) {
+      const end = Date.parse(block.end);
+      if (!block.strict || logged.has(block.id) || block.id === holdBlockId || end > nowMs) continue;
+      const done = task.completedAt && Date.parse(task.completedAt) <= end;
+      added.push(strictEntry(block.id, task.id, done ? 'on_time' : 'missed', new Date(end).toISOString()));
+    }
+  }
+  let focus = state.focus;
+  const hold = focus?.strict;
+  if (hold) {
+    const task = state.tasks.find((item) => item.id === hold.taskId);
+    const log = (outcome) => added.push(strictEntry(hold.blockId, hold.taskId, outcome, c.at));
+    if (task?.status === 'completed') {
+      log(task.completedAt && Date.parse(task.completedAt) <= hold.blockEnd ? 'on_time' : 'extended');
+      focus = { ...focus, strict: null };
+    } else if (!task || task.status === 'canceled') {
+      // A task deleted by sync takes its log entries with it, so only a cancel is logged.
+      if (task) log('canceled');
+      focus = { ...focus, strict: null };
+    } else {
+      let holdUntil = hold.holdUntil;
+      let finished = false;
+      while (nowMs >= holdUntil) {
+        if (holdUntil >= hold.limit) {
+          finished = true;
+          break;
+        }
+        holdUntil = Math.min(holdUntil + STRICT_EXTENSION_MINUTES * 60_000, hold.limit);
+      }
+      if (finished) {
+        log('limit_reached');
+        focus = { ...focus, strict: null };
+      } else {
+        const endAt = Math.max(focus.endAt, holdUntil);
+        const blockUntil = Math.max(focus.blockUntil ?? focus.endAt, endAt);
+        if (holdUntil !== hold.holdUntil || endAt !== focus.endAt || blockUntil !== focus.blockUntil) {
+          focus = { ...focus, endAt, blockUntil, strict: { ...hold, holdUntil } };
+        }
+      }
+    }
+  }
+  let next = state;
+  if (added.length > 0 || focus !== state.focus) {
+    next = { ...state, focus, strictLog: [...(state.strictLog ?? []), ...added] };
+  }
+  if (hold) return next;
+
+  let chosen = null;
+  for (const task of next.tasks) {
+    if (!isActive(task)) continue;
+    for (const block of task.workBlocks ?? []) {
+      if (!block.strict || logged.has(block.id)) continue;
+      const start = Date.parse(block.start);
+      if (start > nowMs || nowMs >= Date.parse(block.end)) continue;
+      if (!chosen || start < chosen.start) chosen = { task, block, start };
+    }
+  }
+  if (!chosen) return next;
+  const { task, block } = chosen;
+  const blockEnd = Date.parse(block.end);
+  let working = next;
+  if (!isSessionRunning(working.focus, nowMs)) {
+    const auto = working.preferences.autoAppPreset;
+    const options = { taskId: task.id, device: c.device };
+    if (auto && (working.appPresets ?? []).some((preset) => preset.id === auto)) options.presetId = auto;
+    working = startFocus(working, c.now, options);
+  } else if (working.focus.taskId !== task.id) {
+    if (working.focus.segmentStart != null) working = addSegment(working, working.focus, nowMs, c);
+    working = { ...working, focus: { ...working.focus, taskId: task.id, segmentStart: nowMs } };
+  } else if (working.focus.segmentStart == null) {
+    working = { ...working, focus: { ...working.focus, segmentStart: nowMs } };
+  }
+  const started = working.focus;
+  const endAt = Math.max(started.endAt, blockEnd);
+  return {
+    ...working,
+    focus: {
+      ...started,
+      endAt,
+      blockUntil: Math.max(started.blockUntil ?? started.endAt, endAt),
+      strict: {
+        blockId: block.id, taskId: task.id, blockStart: chosen.start, blockEnd, holdUntil: blockEnd,
+        limit: blockEnd + (blockEnd - chosen.start), exitRequestedAt: null
+      }
+    }
+  };
+}
+
+export function requestStrictExit(state, ctx) {
+  const hold = state.focus?.strict;
+  if (!hold || hold.exitRequestedAt != null) return state;
+  return { ...state, focus: { ...state.focus, strict: { ...hold, exitRequestedAt: context(ctx).now.getTime() } } };
+}
+
+export function cancelStrictExit(state) {
+  const hold = state.focus?.strict;
+  if (!hold || hold.exitRequestedAt == null) return state;
+  return { ...state, focus: { ...state.focus, strict: { ...hold, exitRequestedAt: null } } };
+}
+
+// Leaves a hold early. Website blocking keeps running (FOC-10).
+export function exitStrictHold(state, reason, ctx) {
+  const c = context(ctx);
+  const hold = state.focus?.strict;
+  if (!hold || hold.exitRequestedAt == null || c.now.getTime() - hold.exitRequestedAt < STRICT_EXIT_SECONDS * 1000) {
+    throw new Error('Wait for the countdown to finish.');
+  }
+  const text = String(reason ?? '').trim();
+  if (!text || text.length > 200) throw new Error('Enter a reason to exit.');
+  return {
+    ...state,
+    focus: { ...state.focus, strict: null },
+    strictLog: [...(state.strictLog ?? []), strictEntry(hold.blockId, hold.taskId, 'exited', c.at, text)]
+  };
+}
+
+export function strictReview(state, startDay, endDay) {
+  const timeZone = state.settings?.timeZone;
+  const counts = Object.fromEntries(STRICT_OUTCOMES.map((outcome) => [outcome, 0]));
+  const exits = [];
+  for (const entry of state.strictLog ?? []) {
+    const day = localDate(new Date(entry.at), timeZone);
+    if (day < startDay || day > endDay) continue;
+    counts[entry.outcome] += 1;
+    if (entry.outcome === 'exited') {
+      const task = state.tasks.find((item) => item.id === entry.taskId);
+      exits.push({ at: entry.at, title: task?.title ?? '', reason: entry.reason });
+    }
+  }
+  exits.sort((a, b) => b.at.localeCompare(a.at));
+  return { counts, exits };
 }

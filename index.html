@@ -50,6 +50,14 @@
           <button type="button" class="button focus-button" id="start-focus" data-i18n="today.startFocus">Start focus</button>
           <button type="button" class="button focus-button" id="pause-focus" data-i18n="focusTask.pause" hidden>Pause</button>
           <button type="button" class="button focus-button" id="end-focus" data-i18n="focusTask.end" hidden>End session</button>
+          <button type="button" class="button secondary focus-button" id="strict-exit" data-i18n="strict.exit" hidden>Emergency exit</button>
+          <div id="strict-exit-panel" hidden>
+            <p id="strict-countdown" class="focus-status" role="timer"></p>
+            <label for="strict-reason" class="visually-hidden" data-i18n="strict.reason">Reason for leaving</label>
+            <input id="strict-reason" type="text" maxlength="200" data-i18n-placeholder="strict.reason" placeholder="Reason for leaving">
+            <button type="button" class="button focus-button" id="strict-exit-confirm" data-i18n="strict.confirm" disabled>Exit strict block</button>
+            <button type="button" class="button secondary focus-button" id="strict-stay" data-i18n="strict.stay">Stay</button>
+          </div>
           <p id="focus-status" class="focus-status" role="status"></p>
         </section>
       </div>
@@ -186,11 +194,13 @@
             <h2 id="blocks-label" data-i18n="detail.blocks">Work blocks</h2>
             <p class="muted" data-i18n="detail.blocksHelp">Rescheduling a block keeps the deadline.</p>
             <ul id="block-list" class="compact-list"></ul>
+            <ul id="block-pending" class="compact-list"></ul>
             <form id="block-form">
               <div class="field-row">
                 <div><label for="block-start" data-i18n="detail.start">Start</label><input id="block-start" name="start" type="datetime-local" required></div>
                 <div><label for="block-end" data-i18n="detail.end">End</label><input id="block-end" name="end" type="datetime-local" required></div>
               </div>
+              <label class="check-label"><input id="block-strict" name="strict" type="checkbox"> <span data-i18n="strict.label">Strict: hold me on this task until it is done</span></label>
               <button class="button secondary" type="submit" data-i18n="detail.addBlock">Add work block</button>
             </form>
             <p id="block-feedback" class="feedback" role="status"></p>
@@ -238,6 +248,12 @@
         <h2 id="focus-review-label" data-i18n="focusTask.reviewTitle">Focus time</h2>
         <ul id="focus-review-list" class="task-list"></ul>
         <p class="muted" id="focus-review-empty" hidden data-i18n="focusTask.reviewEmpty">No focus time in this period.</p>
+      </section>
+      <section class="tasks-section" aria-labelledby="strict-review-label">
+        <h2 id="strict-review-label" data-i18n="strict.reviewTitle">Strict blocks</h2>
+        <p id="strict-review-counts" class="muted"></p>
+        <ul id="strict-review-list" class="task-list"></ul>
+        <p class="muted" id="strict-review-empty" hidden data-i18n="strict.reviewEmpty">No strict blocks in this period.</p>
       </section>
       <section class="tasks-section" aria-labelledby="rescheduled-label">
         <h2 id="rescheduled-label" data-i18n="review.rescheduled">Rescheduled</h2>
