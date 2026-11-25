@@ -47,6 +47,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 | APP-01, APP-02, APP-08 | Đã làm trên Windows: Settings tạo, sửa, xóa preset với danh sách app lấy từ cửa sổ đang mở, mức Block hoặc Pause kèm đếm ngược và thời gian pass, tối đa 10 preset và 30 app mỗi preset. Today cho chọn preset hoặc **No app limit** với lựa chọn gần nhất, và chọn preset cho phiên tự động lúc đăng nhập. Phiên sao chép preset khi bắt đầu nên sửa preset chỉ áp dụng cho phiên sau. Preset nằm trong tệp đồng bộ và gộp theo trường. |
 | APP-03 đến APP-07, APP-09 | Đã làm trên Windows. `desktop/app-watcher.cjs` chạy một helper C# qua Windows PowerShell (`Add-Type`, không cần module native): báo cửa sổ phía trước 4 lần mỗi giây kèm đường dẫn exe, và nhận lệnh thu nhỏ hoặc khôi phục. `desktop/app-guard.cjs` quyết định cho phép, Block hay Pause theo bản sao preset của phiên do renderer gửi qua `desktop:app-limit`, giữ pass trong bộ nhớ đến hết phiên, và báo độ phủ (không đọc được đường dẫn hoặc thu nhỏ thất bại là phủ một phần; helper lỗi quá 3 lần là không khả dụng). Renderer hiện hộp thoại can thiệp, ghi `appActivity` cục bộ (không đồng bộ) và Review hiện số lần chặn, tạm dừng, cho qua theo app kèm lý do. Đã thử thật trên máy phát triển với Notepad. Còn lại: APP-10 và nghiệm thu A-12, gồm app chạy quyền quản trị và app toàn màn hình. |
 | FOC-06 đến FOC-08, CAL, GH, AI | Chưa làm. Cần đăng ký OAuth hoặc GitHub App, nhà cung cấp AI, dịch vụ đồng bộ, hoặc thiết bị Android thật. |
+| PLAN-01, PLAN-02, WS-01 đến WS-05, FOC-09 đến FOC-12, WB-01 đến WB-04 | Chưa làm. Thêm vào SRS 0.6 ngày 2026-11-25. Xem [thay đổi dữ liệu cho SRS 0.6](#thay-đổi-dữ-liệu-cho-srs-06). Ưu tiên số một là WB (work block nghiêm ngặt, chốt ngày 2026-11-25). WB cần phiên gắn với task và đoạn thời gian, nên thứ tự làm là: FOC-09 đến FOC-11 ở mức tối thiểu, rồi WB-01 đến WB-04, rồi FOC-12 (đồng hồ nổi), PLAN-01 và PLAN-02 (lịch), cuối cùng WS (không gian làm việc). |
 
 ## Hướng kỹ thuật cho các giai đoạn tiếp theo
 
@@ -54,10 +55,76 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 |---|---|
 | Windows | C# với **.NET 10 LTS**, WPF, CommunityToolkit.Mvvm và SQLite. Chuyển luồng Today → focus → Chrome trước. Khi thiết kế lưu trữ mới, đánh giá cách mang dữ liệu planner từ bản Electron sang. |
 | Chrome | Giữ Manifest V3 và các bài kiểm thử hành vi. Xem xét chuyển từ loopback sang Chrome Native Messaging sau khi WPF chạy được luồng chính. |
-| Android | Giữ Capacitor dùng được trong lúc thử nghiệm quyền và hành vi trên máy POCO. Kotlin, Jetpack Compose và Room là hướng native được đề xuất. |
-| Đồng bộ và tích hợp | ASP.NET Core và PostgreSQL là phương án khi bắt đầu đồng bộ nhiều thiết bị. Dịch vụ nên nhận và trả đúng payload `fix-myself-sync` hiện tại để dùng lại `mergeSync`. GitHub Issues, Google Calendar và AI vẫn thuộc các giai đoạn triển khai trong SRS. |
+| Android | Giữ Capacitor dùng được trong lúc thử nghiệm quyền và hành vi trên máy POCO. Kotlin, Jetpack Compose và Room là hướng native được đề xuất. Vai trò, trạng thái và kế hoạch: [Android](ANDROID.md). |
+| Đồng bộ | **Supabase** (PostgreSQL có sẵn Auth, Row Level Security và Realtime) thay cho tự viết ASP.NET Core. Xem [đồng bộ qua Supabase](#đồng-bộ-qua-supabase). |
+| Tích hợp | GitHub Issues, Google Calendar và AI vẫn thuộc các giai đoạn triển khai trong SRS. Phần nào cần giữ bí mật phía server (khóa AI, token GitHub App) chạy trong Supabase Edge Functions, không nằm trong app. |
 | iPhone | SwiftUI và Screen Time API là hướng đánh giá sau. |
 
 Mốc Windows đầu tiên cần chứng minh người dùng đăng nhập, thấy Today, mở trang đã chọn và thấy việc tiếp theo trong Chrome. Kiểm tra cả trường hợp Chrome đã mở sẵn, desktop mất kết nối, và phiên hết hạn. Đối chiếu A-01 và A-02 trong [SRS.md](../SRS.md) và ghi kết quả vào [bảng nghiệm thu](ACCEPTANCE.md).
 
 Ở commit nền `f706f9e`, bài kiểm tra Node và Chromium đã chạy đạt, cùng kiểm tra nhanh Electron, build Windows bằng `npm run desktop:package` (trình cài NSIS) và Android debug APK. Nghiệm thu sau khi đăng nhập trên Windows 11 và kiểm tra Android app blocking trên máy POCO vẫn là các mốc xác minh thiết bị thật theo A-01 đến A-03.
+
+## Đồng bộ qua Supabase
+
+Quyết định ngày 2026-11-25: dùng Supabase làm server dữ liệu chung cho Windows và Android, thay cho file đồng bộ chép tay. Mục tiêu là SYS-06 (đồng bộ trong 30 giây) và SYS-02 (offline, không trùng, không hồi sinh dữ liệu đã xóa).
+
+**Nguyên tắc**
+
+- App vẫn **local-first**: dữ liệu chính nằm trên máy và app chạy đầy đủ khi mất mạng. Supabase chỉ thay phương tiện chuyển payload, không thay logic gộp.
+- Logic gộp giữ nguyên ở client: `mergeSync` trong [app/model.js](../app/model.js) đã có test cho xung đột và tombstone (A-10). Server không tự gộp.
+- Dữ liệu riêng từng thiết bị không lên server: `focus`, `reminders`, `conflicts`, `peers`, `appActivity`, `state.chrome`, ảnh workout, file, thư mục và app trong không gian làm việc (WS-01), vị trí đồng hồ nổi.
+- Mã ghép nối Chrome và khóa Supabase của phiên đăng nhập lưu bằng bộ lưu trữ bảo vệ của hệ điều hành (SYS-03), không nằm trong `localStorage`.
+
+**Bước 1: một tài liệu mỗi tài khoản**
+
+```sql
+create table sync_docs (
+  user_id    uuid primary key references auth.users,
+  payload    jsonb not null,      -- đúng định dạng fix-myself-sync
+  rev        bigint not null default 1,
+  updated_at timestamptz not null default now()
+);
+alter table sync_docs enable row level security;
+create policy own_doc on sync_docs
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+```
+
+Luồng đồng bộ của mỗi thiết bị:
+
+1. Đăng nhập bằng Supabase Auth (email OTP hoặc Google). Mọi thiết bị dùng cùng một tài khoản (SYS-03).
+2. Đọc `payload` và `rev`, chạy `mergeSync(local, remote)` trên máy.
+3. Ghi lại bằng `update … where rev = <rev đã đọc>` và tăng `rev`. Nếu không dòng nào được cập nhật, nghĩa là thiết bị khác vừa ghi: đọc lại, gộp lại và thử lần nữa.
+4. Đăng ký Realtime trên dòng của mình để nhận thay đổi từ thiết bị khác. Thiết bị cũng đồng bộ khi khởi động, khi có mạng lại và sau mỗi thay đổi (có debounce).
+
+Cách này dùng lại nguyên định dạng `fix-myself-sync`, nên file đồng bộ vẫn dùng được để sao lưu và chuyển dữ liệu.
+
+**Bước 2: khi payload lớn dần**
+
+Tách payload thành bảng theo loại bản ghi (`tasks`, `focus_segments`, `block_rules`, `app_presets`, `workouts`, `tombstones`), mỗi dòng giữ dấu sửa `thời điểm|id thiết bị` như hiện nay. Thiết bị chỉ gửi và nhận các dòng đổi sau lần đồng bộ trước. `focus_segments` chỉ thêm và xóa theo `id`, nên gộp bằng phép hợp.
+
+**Cần lưu ý**
+
+- Gói miễn phí tạm dừng project sau khoảng một tuần không có truy cập. Dùng hằng ngày thì không ảnh hưởng. Khi project bị tạm dừng, app vẫn chạy cục bộ và báo đồng bộ không khả dụng.
+- Extension Chrome không nói chuyện với Supabase. Nó vẫn chỉ nhận dữ liệu từ app desktop qua bridge cục bộ (SYS-04).
+- Xóa tài khoản phải xóa `sync_docs` và dữ liệu liên quan (SYS-05).
+
+## Thay đổi dữ liệu cho SRS 0.6
+
+State cục bộ chuyển từ `version: 2` sang `version: 3`, kèm hàm chuyển đổi khi đọc như v1 sang v2.
+
+| Dữ liệu | Đồng bộ | Yêu cầu | Ghi chú |
+|---|---|---|---|
+| `task.links`: `[{ id, url, label }]` | Có, là trường của task | WS-01 | Chỉ http và https, tối đa 20 mục chung với dữ liệu cục bộ. |
+| `localWorkspaces[taskId]`: `[{ id, kind: 'file' \| 'folder' \| 'app', path, label }]` | Không | WS-01, WS-04 | Đường dẫn chỉ đúng trên máy đã thêm. |
+| `focus.sessionId`, `focus.taskId` (hoặc `null` là wandering), `focus.workspaceApps`, `focus.paused`, `focus.endedAt`, `focus.strictBlockId` | Không | FOC-09, FOC-10, WS-04, WB-02 | `workspaceApps` được sao chép lúc bắt đầu phiên, giống preset. Sau **End session**, phiên vẫn được giữ đến `endAt` để Chrome tiếp tục chặn trang, nhưng không còn ghi thời gian và không còn giới hạn app. Phiên mới bắt đầu trong khoảng đó chặn hợp hai danh sách trang. |
+| `focusSegments`: `[{ id, sessionId, taskId, start, end, deviceId }]` | Có, gộp theo `id` | FOC-10, FOC-11 | Xóa task thì xóa các đoạn của nó bằng tombstone. |
+| `workBlock.strict` | Có, đi cùng trường `workBlocks` của task | WB-01 | Bỏ `strict`, rút ngắn hoặc dời muộn block đi qua `pendingRuleChanges` với cùng `changeDelay`. |
+| `strictLog`: `[{ id, blockId, taskId, outcome, reason, at }]` | Có, gộp theo `id` | WB-04 | `outcome` là `on_time`, `extended` hoặc `exited`. |
+| `miniTimer`: `{ enabled, x, y, clickThrough }` | Không | FOC-12 | |
+
+Phần desktop cần thêm:
+
+- **Không gian làm việc**: IPC `desktop:open-workspace` nhận `taskId`. Tiến trình chính đọc mục đã lưu và mở bằng `shell.openExternal` (web), `shell.openPath` (file, thư mục) hoặc chạy exe không tham số. Nó không nhận đường dẫn tùy ý từ renderer. Chọn file và thư mục bằng `dialog.showOpenDialog`, chọn app bằng danh sách sẵn có trong [desktop/apps.cjs](../desktop/apps.cjs).
+- **App guard**: danh sách được phép của phiên là preset cộng `focus.workspaceApps` ([desktop/app-guard.cjs](../desktop/app-guard.cjs)).
+- **Đồng hồ nổi**: một `BrowserWindow` riêng, không viền, `alwaysOnTop` mức `screen-saver`, tự tính thời gian còn lại từ `endAt`. Bật tắt qua IPC và menu khay. Bấm xuyên bằng `setIgnoreMouseEvents`.
+- **Lịch** (PLAN-01, PLAN-02): màn mới trong renderer, dùng chung giữa desktop và Android. Android chỉ hiển thị. Kéo thả ghi lại trường `workBlocks` của task qua đường sửa task hiện có trong model. Đường này đã giữ nguyên hạn chót, ghi timeline và dựng lại nhắc nhở.

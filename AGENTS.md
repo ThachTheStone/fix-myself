@@ -4,6 +4,7 @@
 
 ## Bắt đầu
 
+0. Đọc [SOUL.md](SOUL.md) để nắm vai trò và cách trao đổi với người dùng.
 1. Đọc [SRS.md](SRS.md) để nắm phạm vi, mã yêu cầu và tiêu chí nghiệm thu.
 2. Đọc [kiến trúc](docs/ARCHITECTURE.md) để xác định phần đang chạy, điểm vào của code và hướng chuyển Windows sang .NET.
 3. Đọc [quy trình làm việc](docs/WORKFLOW.md) trước khi sửa, kiểm tra hoặc bàn giao.

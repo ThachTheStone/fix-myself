@@ -3,9 +3,9 @@
 
 | Document field | Value |
 |---|---|
-| Version | 0.5 |
+| Version | 0.6 |
 | Status | Draft for implementation |
-| Date | 2026-11-23 |
+| Date | 2026-11-25 |
 | Initial platforms | Windows 11 and privately installed Android |
 | Primary Windows browser | Google Chrome |
 | Android pilot | Xiaomi HyperOS `1.0.17.0.UNLMIXM`. Likely POCO X6 Pro 5G running Android 14, pending confirmation in About phone. |
@@ -23,6 +23,10 @@ The app helps one person remember their mission and schedule, turn commitments i
 | Distraction reporting | Blocked attempts in enabled Chrome profiles | Estimated foreground time for selected apps, usage alerts, and interruption counts when blocking is active |
 | Integrations | Google Calendar, GitHub issue import, and optional AI planning | Same account, imported tasks, plan, and AI approval flow |
 | Weekly review | Task outcomes, distraction trends, and workout entries | Same review, workout logging, and photo attachment |
+| Task workspaces and time | Open a task's websites, files, folders, and apps together; focus time per task; floating countdown | Focus time per task in the dashboard. Workspaces and the floating countdown are Windows-only. |
+| Calendar view | Day and week view of work blocks with drag to reschedule | Read-only day and week view |
+
+**Device roles.** Windows is where the user plans and works: tasks, work blocks, workspaces, presets, and rules are set up there. The phone is for awareness and restraint: the productivity dashboard and weekly review, reminders and notifications, quick capture to the inbox, and limiting phone scrolling once FOC-07 passes A-03. See [Android status and plan](docs/ANDROID.md).
 
 **Future scope.** iPhone support, additional desktop platforms, Windows app blocking outside focus sessions, Android website blocking, and direct Strava activity display. A public Android release requires its own distribution and permission review.
 
@@ -39,6 +43,9 @@ The app helps one person remember their mission and schedule, turn commitments i
 - **App preset** is a named list of allowed Windows apps with a strength. Choosing one when a focus session starts limits that session to those apps.
 - **Focus intervention** shows why a selected site or app is blocked, the time remaining, and the next action from Today.
 - **Weekly review** shows delivery, quality review, distraction trends, and workout check-ins.
+- **Task workspace** is the list of websites, files, folders, and Windows apps the user attached to a task so they can open them together.
+- **Task session** is a focus session linked to one task. A **wandering session** is a focus session linked to no task. Its time is recorded but counts toward no task.
+- **Strict work block** is a work block that, during its time, holds the user on its task until the task is completed or the block's limit is reached.
 
 ## 3. Daily plan, commitments, and reminders
 
@@ -49,6 +56,8 @@ The app helps one person remember their mission and schedule, turn commitments i
 | TASK-01 | The app shall support quick capture with a title and an initial open status. Optional fields shall include mission, priority, next action, subtasks, effort estimate, completion criteria, planned work blocks, and deadline. Supported task states shall be open, in progress, completed, and canceled. |
 | TASK-02 | The user shall be able to record a commitment and attach it to a task. The timeline shall show the commitment time, scheduled work, original and revised deadlines, completion, and reopen events. Rescheduling a work block shall leave the deadline unchanged. |
 | REM-01 | The user shall be able to set reminders for a planned start or deadline, configure lead times, snooze a reminder, and choose a default notification device. Updating the triggering time shall replace future reminders tied to that trigger. Completing or canceling a task shall cancel its pending reminders. |
+| PLAN-01 | The app shall show work blocks in a day view and a week view laid out like a calendar: one column per day, hours down the side, and each block placed at its time and labeled with its task. Deadlines shall appear as markers at their time, and strict work blocks (WB-01) shall be marked. The view shall use the planning time zone. |
+| PLAN-02 | On Windows, the user shall move a block by dragging it, change its length by dragging its edge, and create a block for a chosen task by selecting an empty time range. Moving or resizing a block shall keep the task's deadline (TASK-02) and replace that block's reminders (REM-01). Overlapping blocks shall be shown side by side. Android shall show the same view without editing. After CAL-01, busy time from connected calendars shall appear as unavailable. |
 | REM-02 | The app shall schedule reminders locally where permitted. It shall restore pending reminders after restart and show when notification permission is missing or delivery timing is approximate. After a long offline or suspended period, overdue reminders shall be grouped when the app next runs. [Android notification permission](https://developer.android.com/develop/ui/views/notifications/notification-permission) · [Android alarm scheduling](https://developer.android.com/develop/background-work/services/alarms) |
 
 ## 4. Focus sessions and blocking
@@ -58,7 +67,7 @@ The app helps one person remember their mission and schedule, turn commitments i
 | FOC-01 | In setup, the user shall enable automatic focus, choose a duration, and select distractions. YouTube, Facebook, and Instagram shall be offered as starting choices. The first Windows sign-in of each planning day shall start the session when the app receives the startup signal. The app shall allow manual focus sessions as well. |
 | FOC-02 | The app shall record one automatic session per planning day and persist its end time. Signing back in, waking from sleep, or restarting on the same day shall preserve that end time. A manual launch shall display the current session state. If a new planning day starts during an already active session, it shall continue to its recorded end time without a second overlapping session. |
 | FOC-03 | The Chrome extension shall block selected domains and subdomains in enabled profiles during an active session. It shall cover direct navigation and selected sites in tabs already open at session start. Unlisted sites shall remain accessible. Feed-only and Shorts-only rules require separate compatibility testing. [Chrome filtering API](https://developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest) · [Chrome navigation API](https://developer.chrome.com/docs/extensions/reference/api/webNavigation) |
-| FOC-04 | The intervention shall show the reason, session end time, and today's next action, with a way to open Today. During an active session the app shall provide no early-end or continue-anyway control. The user can edit exceptions, block lists, and durations for future sessions. OS and browser controls shall remain accessible. |
+| FOC-04 | The intervention shall show the reason, session end time, and today's next action, with a way to open Today. During an active session the app shall provide no control that lifts website blocking early or continues anyway; **End session** (FOC-10) ends time recording and app limits but leaves website blocking until the original end time. The user can edit exceptions, block lists, and durations for future sessions. OS and browser controls shall remain accessible. |
 | FOC-05 | The browser extension shall use a valid locally stored rule set and session when offline and release its block at the stored expiry. The app shall show coverage by supported browser profile. A missing or disabled extension shall appear as unavailable when the app can determine that state. An extension that cannot verify a valid active session shall allow access and show degraded coverage when available. |
 | FOC-06 | When the phone opts in to desktop focus, it shall apply a synced session until the desktop session's end time. A session received halfway through shall use the remaining time. A session received after expiry shall be skipped. Usage alerts remain independently configurable. |
 | FOC-07 | On the pilot phone, a user-enabled service shall be evaluated for intercepting selected native apps during focus and showing the intervention. Enforcement shall follow user-configured rules and operate independently of the AI. The dialer, emergency functions, and system settings shall be excluded. [Android usage statistics](https://developer.android.com/reference/android/app/usage/UsageStatsManager) · [Android background activity restrictions](https://developer.android.com/guide/components/activities/secure-bal) · [Android restricted settings](https://support.google.com/android/answer/12623953) |
@@ -98,6 +107,36 @@ An app preset limits a focus session to the Windows apps the user chose for that
 | APP-08 | Presets shall be part of the synced plan and merge field by field, so every Windows device shows the same presets. An app that is not installed on a device shall be shown as missing there. Only the user shall create or change presets through Settings; the AI assistant shall not create, change, or bypass them, as in BLK-09. |
 | APP-09 | The app shall record, for each app, attempts stopped by **Block**, pauses, and passes taken, with pass reasons, for the weekly review, separately from website blocking. It shall record only the app's display name, executable path, and time, never window titles or content. |
 | APP-10 | Future scope: allowed websites in a preset, app limits outside focus sessions as block rules, and Android app presets once FOC-07 passes A-03. |
+
+### Task workspaces
+
+A task can keep the websites, documents, and apps used to work on it, so one click opens everything needed. This section applies to the Windows desktop app.
+
+| ID | Requirement |
+|---|---|
+| WS-01 | The user shall attach up to 20 items to a task: websites (http or https links), files, folders, and Windows apps. Files and folders shall be chosen with the system picker, and apps as in APP-01, not by typing a path. Websites shall be part of the synced plan. Files, folders, and apps shall stay on the device that added them, and other devices shall show them as unavailable. |
+| WS-02 | **Open workspace** shall open every item of the task: websites in the default browser, files and folders with their default program, and apps without arguments. The app shall open only items stored on the task, shall not close any window or app already open, and shall report each item that could not be opened. |
+| WS-03 | When a workspace website is covered by the focus site list or by an active block rule, the app shall tell the user which list or rule covers it and offer a way to Settings. It shall not open or unblock that site. Changes follow the timing of FOC-04 and BLK-06. |
+| WS-04 | A task session shall copy the task's workspace apps when it starts and allow them for the whole session in addition to the session's preset (APP-02, APP-03). Changes to the workspace shall apply to sessions that start afterwards. |
+| WS-05 | At sign-in, Today shall show the pinned priorities (DAY-02) first, ready to open. The app shall not open any workspace automatically. When no priority is pinned, Today shall show the plan as usual. |
+
+### Focus time per task
+
+| ID | Requirement |
+|---|---|
+| FOC-09 | Starting a manual focus session shall let the user choose one active task or **No task**. A session with a task is a task session, and a session without one is a wandering session. The automatic session at sign-in (FOC-01) shall start as a wandering session. The task of a session shall not change while it runs; to work on another task, the user starts another session after this one. Starting a task session shall offer **Open workspace** (WS-02). |
+| FOC-10 | During a session the user shall be able to pause and resume time recording, and to end the session with **End session**. Pausing records the end of the current time segment and resuming starts a new one. **End session** records the end of the last segment, ends the session's task link and app limits, and lets the user start another session. Neither control shall lift the session's website blocking before its original end time; the extension keeps those sites blocked until then (FOC-04). If the session reaches its end time while paused, no further time is recorded. Both controls are unavailable during a strict hold (WB-02), where only the emergency exit applies (WB-04). |
+| FOC-11 | The app shall record each time segment with a stable ID, its session, its task or none, its start and end, and the device. A task's focus time shall be the sum of its segments and shall be shown on the task next to its effort estimate. The weekly review shall show focus time by task and wandering time separately. A session that reaches its end time while the app is closed shall be recorded up to its end time when the app next runs. Segments shall sync and merge by ID. Deleting a task shall delete its segments on every device. |
+| FOC-12 | On Windows, the user shall be able to show a small floating countdown of the session's remaining time and its task name or **Wandering**. It shall stay on top of other windows, be movable, remember its position on that device, and optionally let clicks pass through it. It shall open from Today and the notification area icon and close when the session ends. Full-screen exclusive apps may cover it. Android does not provide this countdown. |
+
+### Strict work blocks
+
+| ID | Requirement |
+|---|---|
+| WB-01 | The user shall be able to mark a work block as strict. A strict block requires its task to have subtasks or completion criteria. Removing strictness, shortening a strict block, or moving it to a later time weakens protection and shall wait for the change delay (BLK-06). Only the user shall set strictness; the AI assistant shall not create, change, or bypass it, as in BLK-09. |
+| WB-02 | At the start of a strict block, the app shall start a task session for its task, or link the running session to that task from that time onward, and offer **Open workspace**. This is the only case in which a running session's task changes (FOC-09). Until the block ends, the session shall offer no pause, no task change, and no early end. |
+| WB-03 | When the block ends and the task is not completed, the session shall extend in 15-minute steps until the user completes the task, up to twice the block's length. Completing the task shall end the strict hold; the rest of the session follows FOC-04. |
+| WB-04 | The user shall be able to leave a strict hold through an emergency exit that requires a 2-minute countdown and a reason. The exit ends the strict hold but not website blocking already in effect. The weekly review shall list strict blocks completed on time, completed in extension, and exited, with exit reasons. OS controls shall remain accessible, as in FOC-04. |
 
 ## 5. Google Calendar and the AI assistant
 
@@ -140,7 +179,7 @@ An app preset limits a focus session to the Windows apps the user chose for that
 
 | ID | Requirement |
 |---|---|
-| SYS-01 | The system shall use stable IDs for tasks, commitments, work blocks, reminders, focus sessions, synced devices, and approved actions. Integration links shall retain provider identifiers and last successful refresh times. Daily boundaries shall use the user's planning time zone. Running session end times shall remain fixed when time zones change. |
+| SYS-01 | The system shall use stable IDs for tasks, commitments, work blocks, reminders, focus sessions and their time segments, synced devices, and approved actions. Integration links shall retain provider identifiers and last successful refresh times. Daily boundaries shall use the user's planning time zone. Running session end times shall remain fixed when time zones change. |
 | SYS-02 | Windows and Android shall cache Today, tasks, reminders, and active focus rules for offline use. The user shall be able to edit tasks offline. Reconnect shall reconcile updates without duplication. Conflicting edits to the same field shall surface both values for resolution. Deletions shall propagate so reconnecting devices cannot restore removed items silently. |
 | SYS-03 | Pair devices to the same private account. Integrations and OS permissions shall be opt-in. Credentials shall be stored using protected storage, and network traffic shall be encrypted. The user shall be able to unlink a device, disconnect an integration, and see which capabilities depend on each permission. |
 | SYS-04 | With user consent, sync only the daily totals needed for the phone usage report. Raw usage events shall stay on the phone. The app shall avoid collecting notification text, keystrokes, screenshots, page contents, and full browsing history. The extension shall receive only the planning data required for its intervention. |
@@ -165,6 +204,10 @@ An app preset limits a focus session to the Windows apps the user chose for that
 | A-10 · Offline changes | Edit the same task field on both devices while offline, reconnect, and verify the app presents both values. Delete a task on one device and ensure an offline copy cannot restore it on reconnect. |
 | A-11 · Block rules | Create a scheduled **Block** rule and an always-on **Pause** rule. Verify the Block rule applies only in its window, including a window that crosses midnight, and reopens access at its end. On the Pause rule, wait out the countdown, take a pass, and verify the site pauses again when the pass expires. Start a focus session and verify that focus sites are blocked despite a pass. Disable a rule and verify it keeps applying until the change delay ends. Cancel a pending change and verify the rule stays. Close the desktop app and verify the rules still apply. Verify the weekly review shows pauses, passes, and reasons separately from focus blocking. |
 | A-12 · Allowed apps | Create a **Block** preset allowing VS Code and Claude Desktop and start a manual session with it. Verify both apps work, and that bringing another app to the front, including one opened before the session, minimizes it and shows the intervention without closing it. Verify Explorer, Settings, Task Manager and open and save dialogs stay usable. Edit the preset during the session and verify the running session keeps its list; restart the app and verify the same. Repeat with **Pause**: wait out the countdown, take a pass, and verify the app pauses again when the pass expires and that blocked websites still offer no continue. Run a blocked app as administrator and verify partial coverage is shown. |
+| A-13 · Task workspace | Attach a website, a file, a folder, and an app to a task and open the workspace. Verify all four open and nothing already open closes. Start a session with a preset that does not list the app and verify the app is allowed. Add a site on the focus list and verify the app names the list and does not open the site. On a second device, verify the website syncs and the local items show as unavailable. Sign in and verify Today shows pinned priorities and opens no workspace. |
+| A-14 · Focus time | Run a task session with one pause and a wandering session. Verify the task shows the recorded time without the pause and the weekly review shows task time and wandering time separately. Verify blocking continued during the pause. End a session early and verify its time stops, its app limits end, and its sites stay blocked until the original end time. Close the app during a session, reopen after its end, and verify time stops at the end time. Show the floating countdown, switch to other apps, and verify it stays on top and keeps its position after a restart. |
+| A-15 · Strict work block | Mark a block strict on a task with subtasks. At its start verify a task session begins with no pause, task change, or end control. Leave a subtask open past the block end and verify the session extends, then completes when the task is completed. Repeat and take the emergency exit, verifying the countdown, required reason, and the entry in the weekly review. Remove strictness and verify it waits for the change delay. |
+| A-16 · Calendar view | Drag a work block to another day, resize another, and create one from an empty range. Verify the deadline is unchanged, reminders follow the new times, and the same blocks appear read-only on the phone after sync. |
 
 ## 10. Implementation sequence and open validation
 
