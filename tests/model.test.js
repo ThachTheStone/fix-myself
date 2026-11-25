@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   addToToday, captureTask, carryovers, deleteTask, deliveryReview, dueReminders, exportSync,
+  appLimitSnapshot, endFocus, focusTimeReview, pauseFocus, resumeFocus, settleFocus, taskFocusMinutes,
   focusSnapshot, inboxTasks, localDate, markDelivered, mergeSync, normalizeDomains, onLogin,
   parseLeadTimes, pendingDelivery, readState, resolveConflict, saveState, saveTask, saveWorkout,
   setNextAction, snoozeReminder, startFocus, STORAGE_KEY, todayTasks, todayView, toggleTask,
@@ -55,7 +56,7 @@ test('a version 1 plan migrates with its tasks, mission and focus session', () =
     preferences: { focusAtLogin: true, focusMinutes: 30, domains: ['youtube.com'] }
   };
   const state = readState(makeStorage(JSON.stringify(v1)));
-  assert.equal(state.version, 2);
+  assert.equal(state.version, 3);
   assert.equal(state.mission, 'Ship it');
   assert.deepEqual(state.tasks.map((task) => task.status), ['completed', 'open']);
   assert.equal(state.tasks[1].originalDeadline, '2026-11-21T10:00:00.000Z');
@@ -295,4 +296,155 @@ test('REV-03: blocked attempts by site show gaps and compare only fully covered 
   assert.deepEqual(coverage.map(({ name, current }) => [name, current]), [['Work', true]]);
   assert.equal(chromeCoverage(state, Date.parse('2026-11-18T11:00:00Z'))[0].current, false);
   assert.equal(JSON.stringify(exportSync(state, { id: 'pc', name: 'PC' })).includes('youtube.com'), false);
+});
+
+// ---- Focus sessions linked to tasks (FOC-09 to FOC-11)
+
+function withTask(timeZone = 'UTC') {
+  let state = fresh(timeZone);
+  state = captureTask(state, { title: 'Write' }, ctx('2026-11-19T08:00:00Z'));
+  return { state, id: state.tasks[0].id };
+}
+
+test('a version 2 plan migrates to version 3 and a version 3 plan round-trips', () => {
+  const v2 = { ...fresh(), version: 2, focus: { endAt: 9000, domains: ['a.com'], apps: null } };
+  delete v2.focusSegments;
+  const migrated = readState(makeStorage(JSON.stringify(v2)));
+  assert.equal(migrated.version, 3);
+  assert.deepEqual(migrated.focusSegments, []);
+  assert.equal(migrated.focus.taskId, null);
+  assert.equal(migrated.focus.startedAt, 9000);
+  assert.equal(migrated.focus.blockUntil, 9000);
+  assert.equal(migrated.focus.segmentStart, null);
+  assert.equal(migrated.focus.endedAt, null);
+  assert.equal(typeof migrated.focus.sessionId, 'string');
+  const again = readState(makeStorage(JSON.stringify(migrated)));
+  assert.deepEqual(again, migrated);
+});
+
+test('pause, resume and settle record segments and stop at the end time', () => {
+  const { state, id } = withTask();
+  const start = at('2026-11-19T09:00:00Z');
+  let s = startFocus(state, start, { taskId: id });
+  assert.equal(s.focus.taskId, id);
+  s = pauseFocus(s, ctx('2026-11-19T09:10:00Z'));
+  assert.equal(s.focus.segmentStart, null);
+  assert.equal(s.focusSegments.length, 1);
+  s = resumeFocus(s, ctx('2026-11-19T09:20:00Z'));
+  s = settleFocus(s, ctx('2026-11-19T11:00:00Z'));
+  assert.equal(s.focusSegments.length, 2);
+  assert.equal(taskFocusMinutes(s, id, at('2026-11-19T11:00:00Z')), 35);
+  assert.equal(s.focusSegments[1].end, '2026-11-19T09:45:00.000Z');
+  assert.equal(s.focusSegments[0].deviceId, 'pc');
+});
+
+test('starting needs an open task, or none for a wandering session', () => {
+  const { state, id } = withTask();
+  const done = toggleTask(state, id, ctx('2026-11-19T08:30:00Z'));
+  assert.throws(() => startFocus(done, at('2026-11-19T09:00:00Z'), { taskId: id }), /Choose an open task/);
+  assert.throws(() => startFocus(state, at('2026-11-19T09:00:00Z'), { taskId: 'missing' }), /Choose an open task/);
+  assert.equal(startFocus(state, at('2026-11-19T09:00:00Z')).focus.taskId, null);
+});
+
+test('ending a session stops time and app limits but keeps sites blocked', () => {
+  const { state, id } = withTask();
+  const base = { ...state, appPresets: [{ id: 'p', name: 'Work', apps: [{ path: 'C:\\x\\a.exe', name: 'a' }], strength: 'block', countdownSeconds: 15, passMinutes: 10 }] };
+  let s = startFocus(base, at('2026-11-19T09:00:00Z'), { taskId: id, presetId: 'p' });
+  const blockUntil = s.focus.blockUntil;
+  assert.ok(appLimitSnapshot(s, at('2026-11-19T09:05:00Z')));
+  s = endFocus(s, ctx('2026-11-19T09:15:00Z'));
+  assert.equal(s.focusSegments.length, 1);
+  assert.equal(s.focusSegments[0].end, '2026-11-19T09:15:00.000Z');
+  assert.equal(appLimitSnapshot(s, at('2026-11-19T09:16:00Z')), null);
+  const snap = focusSnapshot(s, at('2026-11-19T09:16:00Z'));
+  assert.equal(snap.endAt, blockUntil);
+  assert.deepEqual(Object.keys(snap).sort(), ['domains', 'endAt', 'nextAction']);
+  s.preferences = { ...s.preferences, focusMinutes: 120, domains: ['news.com'] };
+  const second = startFocus(s, at('2026-11-19T09:20:00Z'));
+  assert.equal(second.focus.blockUntil, at('2026-11-19T11:20:00Z').getTime());
+  s.preferences = { ...s.preferences, focusMinutes: 5 };
+  const third = startFocus(s, at('2026-11-19T09:20:00Z'));
+  assert.equal(third.focus.blockUntil, blockUntil);
+  assert.ok(third.focus.domains.includes('news.com') && third.focus.domains.includes('youtube.com'));
+});
+
+test('focus actions return the same state when there is nothing to do', () => {
+  const { state } = withTask();
+  const n = ctx('2026-11-19T09:05:00Z');
+  assert.equal(pauseFocus(state, n), state);
+  assert.equal(resumeFocus(state, n), state);
+  assert.equal(endFocus(state, n), state);
+  assert.equal(settleFocus(state, n), state);
+  const running = startFocus(state, at('2026-11-19T09:00:00Z'));
+  assert.equal(resumeFocus(running, n), running);
+  assert.equal(settleFocus(running, n), running);
+  const paused = pauseFocus(running, n);
+  assert.equal(pauseFocus(paused, n), paused);
+  const ended = endFocus(paused, n);
+  assert.equal(endFocus(ended, n), ended);
+  assert.equal(pauseFocus(ended, n), ended);
+});
+
+test('deleting the session task drops its segments and makes the session wandering', () => {
+  const { state, id } = withTask();
+  let s = startFocus(state, at('2026-11-19T09:00:00Z'), { taskId: id });
+  s = pauseFocus(s, ctx('2026-11-19T09:10:00Z'));
+  s = resumeFocus(s, ctx('2026-11-19T09:12:00Z'));
+  s = deleteTask(s, id, ctx('2026-11-19T09:13:00Z'));
+  assert.deepEqual(s.focusSegments, []);
+  assert.equal(s.focus.taskId, null);
+});
+
+test('task focus minutes include the open segment and the review groups by planning day', () => {
+  let { state, id } = withTask('Asia/Ho_Chi_Minh');
+  state = captureTask(state, { title: 'Other' }, ctx('2026-11-19T08:00:00Z'));
+  state = captureTask(state, { title: 'Gone' }, ctx('2026-11-19T08:00:00Z'));
+  const other = state.tasks[1].id;
+  const gone = state.tasks[2].id;
+  const seg = (taskId, start, end) => ({ id: `${taskId}${start}`, sessionId: 's', taskId, start, end, deviceId: 'pc' });
+  state = {
+    ...state,
+    focusSegments: [
+      seg(id, '2026-11-19T10:00:00.000Z', '2026-11-19T10:30:00.000Z'),
+      seg(other, '2026-11-19T10:00:00.000Z', '2026-11-19T10:40:00.000Z'),
+      seg(null, '2026-11-19T11:00:00.000Z', '2026-11-19T11:15:00.000Z'),
+      // 2026-11-19T18:00Z is already 20 November in Ho Chi Minh City.
+      seg(id, '2026-11-19T18:00:00.000Z', '2026-11-19T18:20:00.000Z'),
+      seg('ghost', '2026-11-19T10:00:00.000Z', '2026-11-19T10:50:00.000Z'),
+      seg(gone, '2026-11-19T12:00:00.000Z', '2026-11-19T12:00:10.000Z')
+    ]
+  };
+  state = startFocus(state, at('2026-11-19T12:30:00Z'), { taskId: id });
+  const now = at('2026-11-19T12:40:00Z');
+  assert.equal(taskFocusMinutes(state, id, now), 30 + 20 + 10);
+  const review = focusTimeReview(state, '2026-11-19', '2026-11-19', now);
+  assert.deepEqual(review.byTask, [
+    { taskId: other, title: 'Other', minutes: 40 },
+    { taskId: id, title: 'Write', minutes: 40 }
+  ]);
+  assert.equal(review.wanderingMinutes, 15);
+  assert.equal(review.totalMinutes, 95);
+  const next = focusTimeReview(state, '2026-11-20', '2026-11-20', now);
+  assert.deepEqual(next.byTask.map((item) => item.minutes), [20]);
+  assert.equal(focusTimeReview(state, '2026-12-01', '2026-12-02', now).totalMinutes, 0);
+});
+
+test('focus segments sync by id and respect deleted tasks', () => {
+  const { state, id } = withTask();
+  const seg = (name, taskId) => ({ id: name, sessionId: 's', taskId, start: '2026-11-19T10:00:00.000Z', end: '2026-11-19T10:10:00.000Z', deviceId: 'x' });
+  const pc = { ...state, focusSegments: [seg('a', id), seg('dup', null)] };
+  let phone = mergeSync(fresh(), exportSync(pc, { id: 'pc', name: 'PC' }, at('2026-11-19T11:00:00Z')), ctx('2026-11-19T11:01:00Z', 'phone')).state;
+  phone = { ...phone, focusSegments: [...phone.focusSegments, seg('b', id)] };
+  const back = mergeSync(pc, exportSync(phone, { id: 'phone', name: 'Phone' }, at('2026-11-19T12:00:00Z')), ctx('2026-11-19T12:01:00Z', 'pc')).state;
+  assert.deepEqual(back.focusSegments.map((item) => item.id).sort(), ['a', 'b', 'dup']);
+
+  const deletedOnPhone = deleteTask(phone, id, ctx('2026-11-19T12:30:00Z', 'phone'));
+  const merged = mergeSync(back, exportSync(deletedOnPhone, { id: 'phone', name: 'Phone' }, at('2026-11-19T13:00:00Z')), ctx('2026-11-19T13:01:00Z', 'pc')).state;
+  assert.deepEqual(merged.focusSegments.map((item) => item.id), ['dup']);
+
+  const old = exportSync(pc, { id: 'pc', name: 'PC' }, at('2026-11-19T11:00:00Z'));
+  delete old.data.focusSegments;
+  assert.doesNotThrow(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')));
+  old.data.focusSegments = [{ id: 'x', sessionId: 's', taskId: 5, start: 'a', end: 'b', deviceId: 'd' }];
+  assert.throws(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')), /invalid focus record/);
 });

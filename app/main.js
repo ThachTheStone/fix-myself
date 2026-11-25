@@ -3,7 +3,8 @@ import {
   CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteAppPreset, deleteBlockRule, distractionReview,
   recordChromeReports, ruleReview,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
-  dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused,
+  dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused, isSessionRunning, endFocus, pauseFocus, resumeFocus, settleFocus,
+  taskFocusMinutes, focusTimeReview,
   appLimitSnapshot, appReview, recordAppEvent,
   markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
@@ -41,7 +42,7 @@ let device;
 let currentDay;
 let currentView = 'today';
 let currentTaskId = null;
-let previousFocusStatus;
+let previousFocusStatus = '';
 let reviewStart = null;
 let missedCount = 0;
 let focusNextStep = false;
@@ -204,27 +205,68 @@ function checkRuleChanges() {
   if (next !== state) applyState(next);
 }
 
+function focusDuration(minutes) {
+  if (minutes < 60) return t('common.minutesShort', { n: minutes });
+  return t('focusTask.hoursMinutes', { h: Math.floor(minutes / 60), m: minutes % 60 });
+}
+
+function renderFocusTask(running) {
+  const select = element('focus-task');
+  select.hidden = running;
+  element('focus-task-label').hidden = running;
+  if (running) return;
+  const next = state.nextActionId;
+  const rank = (task) => (task.id === next ? 0 : task.pinned ? 1 : 2);
+  const tasks = state.tasks.filter(isActive)
+    .sort((a, b) => rank(a) - rank(b) || a.title.localeCompare(b.title));
+  const signature = [locale(), tasks.map((task) => [task.id, task.title]), next];
+  if (cached('focus-task-options', signature)) return;
+  const previous = select.value;
+  select.replaceChildren(
+    h('option', { value: '', text: t('focusTask.none') }),
+    ...tasks.map((task) => h('option', { value: task.id, text: task.title })));
+  const nextActive = tasks.some((task) => task.id === next) ? next : '';
+  select.value = tasks.some((task) => task.id === previous) ? previous : nextActive;
+}
+
 function renderTimer(now = Date.now()) {
-  const active = isFocused(state.focus, now);
-  const seconds = active ? Math.ceil((state.focus.endAt - now) / 1000) : state.preferences.focusMinutes * 60;
+  const running = isSessionRunning(state.focus, now);
+  const blocking = isFocused(state.focus, now);
+  const seconds = running ? Math.ceil((state.focus.endAt - now) / 1000) : state.preferences.focusMinutes * 60;
   const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   element('focus-time').textContent = remaining;
-  element('start-focus').hidden = active;
-  element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !active);
+  element('start-focus').hidden = running;
+  element('pause-focus').hidden = !running;
+  element('end-focus').hidden = !running;
+  renderFocusTask(running);
+  const paused = running && state.focus.segmentStart == null;
+  const pauseLabel = t(paused ? 'focusTask.resume' : 'focusTask.pause');
+  if (element('pause-focus').textContent !== pauseLabel) element('pause-focus').textContent = pauseLabel;
+  const current = element('focus-current');
+  current.hidden = !running;
+  if (running) {
+    const task = state.focus.taskId ? state.tasks.find((item) => item.id === state.focus.taskId) : null;
+    const text = task ? t('focusTask.working', { title: task.title }) : t('focusTask.wandering');
+    if (current.textContent !== text) current.textContent = text;
+  }
+  element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !running);
   const covered = chromeCoverage(state, now).filter((profile) => profile.current).length;
   const coverage = covered === 0 ? t('focus.noCoverage') : t('focus.coverage', { n: covered });
   const apps = state.focus?.apps;
-  const sessionStatus = active
+  const sessionStatus = running
     ? desktop ? t('focus.inProgress', { coverage }) : t('focus.localRunning')
-    : desktop ? '' : t('focus.localOnly');
+    : blocking ? t('focusTask.ended', { time: timeOnly.format(new Date(state.focus.blockUntil ?? state.focus.endAt)) })
+      : desktop ? '' : t('focus.localOnly');
   const status = [
     sessionStatus,
-    sessionStatus && apps ? t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') }) : '',
-    active ? appCoverageText() : ''
+    paused ? t('focusTask.paused') : '',
+    running && sessionStatus && apps ? t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') }) : '',
+    running ? appCoverageText() : ''
   ].filter(Boolean).join(' ');
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
-  if (previousFocusStatus !== active) {
-    previousFocusStatus = active;
+  const signature = [running, blocking, state.focus?.endAt, state.focus?.blockUntil, state.focus?.taskId].join('|');
+  if (previousFocusStatus !== signature) {
+    previousFocusStatus = signature;
     syncChrome();
   }
 }
@@ -428,6 +470,9 @@ function renderDetail(fresh) {
   const original = element('detail-original-deadline');
   original.hidden = !(task.originalDeadline && task.originalDeadline !== task.deadline);
   original.textContent = task.originalDeadline ? t('detail.originalDeadline', { time: formatTime(task.originalDeadline) }) : '';
+  const spent = t('focusTask.time', { duration: focusDuration(taskFocusMinutes(state, task.id)) })
+    + (task.effortMinutes ? t('focusTask.estimate', { duration: focusDuration(task.effortMinutes) }) : '');
+  if (element('detail-focus-time').textContent !== spent) element('detail-focus-time').textContent = spent;
 
   if (!cached('detail:commitment', task.commitment)) {
     element('commitment-view').hidden = !task.commitment;
@@ -530,6 +575,14 @@ function renderReview() {
   });
   renderTasks('missed-list', review.carryovers);
   renderTasks('undated-list', review.undated);
+  const focusReview = focusTimeReview(state, reviewStart, end);
+  element('focus-review-empty').hidden = focusReview.totalMinutes > 0;
+  element('focus-review-list').replaceChildren(...(focusReview.totalMinutes > 0 ? [
+    ...focusReview.byTask.map((item) => h('li', { class: 'task' },
+      h('p', { class: 'task-title', text: t('focusTask.reviewItem', { title: item.title, duration: focusDuration(item.minutes) }) }))),
+    ...(focusReview.wanderingMinutes > 0 ? [h('li', { class: 'task' },
+      h('p', { class: 'task-title', text: t('focusTask.reviewWandering', { duration: focusDuration(focusReview.wanderingMinutes) }) }))] : [])
+  ] : []));
   renderDistractions(end);
   renderRuleReview(end);
   renderAppReview(end);
@@ -1040,7 +1093,7 @@ function publishAppLimit() {
 }
 
 function appCoverageText() {
-  if (!state.focus?.apps || !isFocused(state.focus)) return '';
+  if (!state.focus?.apps || !isSessionRunning(state.focus)) return '';
   if (appCoverageState.state === 'unavailable') return t('apps.coverageOff');
   if (appCoverageState.partial.length) return t('apps.coveragePartial');
   return '';
@@ -1375,7 +1428,14 @@ function wireToday() {
   element('start-focus').addEventListener('click', () => {
     const select = element('focus-preset');
     const options = select.hidden ? {} : { presetId: select.value || null };
-    attempt(() => startFocus(state, new Date(), options));
+    options.taskId = element('focus-task').value || null;
+    attempt(() => startFocus(state, new Date(), { ...options, device: device.id }));
+  });
+  element('pause-focus').addEventListener('click', () => {
+    attempt(() => state.focus?.segmentStart == null ? resumeFocus(state, ctx()) : pauseFocus(state, ctx()));
+  });
+  element('end-focus').addEventListener('click', () => {
+    attempt(() => endFocus(state, ctx()));
   });
   element('next-select').addEventListener('change', (event) => {
     attempt(() => setNextAction(state, event.target.value || null, ctx()));
@@ -1617,6 +1677,7 @@ async function boot() {
   if (desktop) element('browser-settings').hidden = false;
   if (presetsEnabled()) element('app-presets').hidden = false;
   if (desktop?.loginLaunch) state = onLogin(state);
+  state = settleFocus(state, ctx());
   desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
   saveState(localStorage, state);
   currentDay = planningDay(state);
@@ -1643,6 +1704,8 @@ async function boot() {
   setInterval(() => {
     tick += 1;
     checkRuleChanges();
+    const settled = settleFocus(state, ctx());
+    if (settled !== state) applyState(settled);
     if (planningDay(state) !== currentDay) render();
     else renderTimer();
     if (tick % 15 === 0) checkReminders();

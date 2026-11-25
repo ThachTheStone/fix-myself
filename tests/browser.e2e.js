@@ -501,3 +501,28 @@ test('an app outside the preset shows the intervention, a pause pass is requeste
   await review.getByText('0 blocked · 1 paused · 1 passes').waitFor();
   await review.getByText('Slack: Reply to the team', { exact: false }).waitFor();
 });
+
+test('a focus session works on a chosen task, pauses, ends with sites still blocked, and shows focus time (FOC-09 to FOC-11)', { timeout: 30_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}`);
+
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Write the report');
+  await page.getByRole('dialog').getByLabel('Task title').press('Enter');
+  await page.locator('#today-list').getByText('Write the report').waitFor();
+
+  await page.getByLabel('Task for this session').selectOption({ label: 'Write the report' });
+  await page.getByRole('button', { name: 'Start focus' }).click();
+  await page.getByText('Working on: Write the report').waitFor();
+  await page.getByRole('button', { name: 'Pause' }).click();
+  await page.getByRole('button', { name: 'Resume' }).click();
+  await page.getByRole('button', { name: 'Pause' }).waitFor();
+  await page.getByRole('button', { name: 'End session' }).click();
+  await page.getByText('Session ended. Sites stay blocked until', { exact: false }).waitFor();
+  await page.getByRole('button', { name: 'Start focus' }).waitFor();
+
+  await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
+  await page.getByText('Focus time:', { exact: false }).waitFor();
+});

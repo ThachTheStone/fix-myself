@@ -2,7 +2,7 @@ import { activeRules, coversIntervals, effectiveRules, scheduleIntervals, startO
 
 export const DEFAULT_DOMAINS = ['youtube.com', 'facebook.com', 'instagram.com'];
 export const STORAGE_KEY = 'fix-myself:v1';
-export const STATE_VERSION = 2;
+export const STATE_VERSION = 3;
 export const STATUSES = ['open', 'in_progress', 'completed', 'canceled'];
 export const STATUS_LABELS = { open: 'Open', in_progress: 'In progress', completed: 'Completed', canceled: 'Canceled' };
 export const MAX_PRIORITIES = 3;
@@ -74,6 +74,7 @@ function defaultState() {
     blockRules: [],
     pendingRuleChanges: [],
     appPresets: [],
+    focusSegments: [],
     // Device-local records below this line are not exported for sync.
     focus: null,
     lastLoginDay: null,
@@ -145,24 +146,41 @@ function migrateTask(task) {
   };
 }
 
+function upgradeFocus(focus) {
+  if (!focus) return null;
+  if (focus.sessionId) return focus;
+  return {
+    ...focus,
+    sessionId: newId(),
+    taskId: null,
+    startedAt: focus.endAt,
+    blockUntil: focus.endAt,
+    segmentStart: null,
+    endedAt: null
+  };
+}
+
 export function migrateState(saved) {
   if (saved?.version === 1 && Array.isArray(saved.tasks) && saved.preferences) {
     return {
       ...defaultState(),
       mission: saved.mission ?? '',
       tasks: saved.tasks.map(migrateTask),
-      focus: saved.focus ?? null,
+      focus: upgradeFocus(saved.focus),
       lastLoginDay: saved.lastLoginDay ?? null,
       preferences: { ...defaultState().preferences, ...saved.preferences }
     };
   }
-  if (saved?.version === STATE_VERSION && Array.isArray(saved.tasks) && saved.preferences) {
+  if ((saved?.version === 2 || saved?.version === STATE_VERSION) && Array.isArray(saved.tasks) && saved.preferences) {
     const defaults = defaultState();
     const settings = { ...defaults.settings, ...saved.settings };
     if (!CHANGE_DELAYS.includes(settings.changeDelay)) settings.changeDelay = DEFAULT_CHANGE_DELAY;
     return {
       ...defaults,
       ...saved,
+      version: STATE_VERSION,
+      focus: upgradeFocus(saved.focus ?? null),
+      focusSegments: saved.version === 2 || !Array.isArray(saved.focusSegments) ? [] : saved.focusSegments,
       blockRules: Array.isArray(saved.blockRules) ? saved.blockRules : defaults.blockRules,
       pendingRuleChanges: Array.isArray(saved.pendingRuleChanges) ? saved.pendingRuleChanges : defaults.pendingRuleChanges,
       appPresets: Array.isArray(saved.appPresets) ? saved.appPresets : defaults.appPresets,
@@ -449,8 +467,10 @@ export function deleteTask(state, id, ctx) {
     ...state,
     tasks: state.tasks.filter((task) => task.id !== id),
     deleted: { ...state.deleted, [id]: c.at },
-    conflicts: state.conflicts.filter((conflict) => conflict.ref !== id)
+    conflicts: state.conflicts.filter((conflict) => conflict.ref !== id),
+    focusSegments: (state.focusSegments ?? []).filter((segment) => segment.taskId !== id)
   };
+  if (state.focus?.taskId === id) next.focus = { ...state.focus, taskId: null };
   if (state.nextActionId === id) next = setRoot(next, 'nextActionId', null, c);
   return reconcileReminders(next, c.now);
 }
@@ -570,8 +590,14 @@ export function todayView(state, now = new Date()) {
 // ---------------------------------------------------------------------------
 // Focus
 
+// Website blocking is active (FOC-10): it outlasts a session that was ended.
 export function isFocused(focus, now = Date.now()) {
-  return Boolean(focus && focus.endAt > now);
+  return Boolean(focus && (focus.blockUntil ?? focus.endAt) > now);
+}
+
+// Time recording and app limits are active.
+export function isSessionRunning(focus, now = Date.now()) {
+  return Boolean(focus && !focus.endedAt && focus.endAt > now);
 }
 
 function copyPreset(preset) {
@@ -588,7 +614,14 @@ function copyPreset(preset) {
 // `options.presetId` is undefined for sessions that should not touch the app
 // limit, null for a manual "No app limit" choice, or a preset id (APP-02).
 export function startFocus(state, now = new Date(), options = {}) {
-  if (isFocused(state.focus, now.getTime())) return state;
+  if (isSessionRunning(state.focus, now.getTime())) return state;
+  let taskId = null;
+  if (options.taskId != null) {
+    const task = state.tasks.find((item) => item.id === options.taskId);
+    if (!task || !isActive(task)) throw new Error('Choose an open task for this session.');
+    taskId = task.id;
+  }
+  state = settleFocus(state, { now, device: options.device });
   const { focusMinutes, domains } = state.preferences;
   let preset = null;
   if (options.presetId != null) {
@@ -599,15 +632,69 @@ export function startFocus(state, now = new Date(), options = {}) {
   const preferences = options.presetId === undefined
     ? state.preferences
     : { ...state.preferences, lastAppPreset: preset ? preset.presetId : null };
+  const endAt = now.getTime() + focusMinutes * 60_000;
+  const blocking = isFocused(state.focus, now.getTime());
   return {
     ...state,
     preferences,
     focus: {
-      endAt: now.getTime() + focusMinutes * 60_000,
-      domains: [...domains],
-      apps: preset
+      sessionId: newId(),
+      taskId,
+      startedAt: now.getTime(),
+      endAt,
+      blockUntil: blocking ? Math.max(endAt, state.focus.blockUntil ?? state.focus.endAt) : endAt,
+      domains: blocking ? [...new Set([...state.focus.domains, ...domains])] : [...domains],
+      apps: preset,
+      segmentStart: now.getTime(),
+      endedAt: null
     }
   };
+}
+
+function addSegment(state, focus, end, c) {
+  if (end <= focus.segmentStart) return { ...state, focus: { ...focus, segmentStart: null } };
+  const segment = {
+    id: newId(),
+    sessionId: focus.sessionId,
+    taskId: focus.taskId ?? null,
+    start: new Date(focus.segmentStart).toISOString(),
+    end: new Date(end).toISOString(),
+    deviceId: c.device
+  };
+  return {
+    ...state,
+    focus: { ...focus, segmentStart: null },
+    focusSegments: [...(state.focusSegments ?? []), segment]
+  };
+}
+
+export function pauseFocus(state, ctx) {
+  const c = context(ctx);
+  const focus = state.focus;
+  if (!isSessionRunning(focus, c.now.getTime()) || focus.segmentStart == null) return state;
+  return addSegment(state, focus, c.now.getTime(), c);
+}
+
+export function resumeFocus(state, ctx) {
+  const c = context(ctx);
+  const focus = state.focus;
+  if (!isSessionRunning(focus, c.now.getTime()) || focus.segmentStart != null) return state;
+  return { ...state, focus: { ...focus, segmentStart: c.now.getTime() } };
+}
+
+export function endFocus(state, ctx) {
+  const c = context(ctx);
+  const focus = state.focus;
+  if (!isSessionRunning(focus, c.now.getTime())) return state;
+  const closed = focus.segmentStart == null ? state : addSegment(state, focus, c.now.getTime(), c);
+  return { ...closed, focus: { ...closed.focus, segmentStart: null, endedAt: c.now.getTime() } };
+}
+
+export function settleFocus(state, ctx) {
+  const c = context(ctx);
+  const focus = state.focus;
+  if (!focus || focus.segmentStart == null || c.now.getTime() < focus.endAt) return state;
+  return addSegment(state, focus, focus.endAt, c);
 }
 
 export function onLogin(state, now = new Date()) {
@@ -621,10 +708,14 @@ export function onLogin(state, now = new Date()) {
 export function focusSnapshot(state, now = new Date()) {
   if (!isFocused(state.focus, now.getTime())) return null;
   // Executable paths stay on this device; the Chrome bridge only needs timing.
-  const { apps, ...focus } = state.focus;
+  const { endAt, domains, blockUntil } = state.focus;
+  const sessionTask = isSessionRunning(state.focus, now.getTime()) && state.focus.taskId
+    ? state.tasks.find((task) => task.id === state.focus.taskId)
+    : null;
   return {
-    ...focus,
-    nextAction: nextTask(state, planningDay(state, now))?.title.slice(0, 160) ?? null
+    endAt: blockUntil ?? endAt,
+    domains,
+    nextAction: (sessionTask ?? nextTask(state, planningDay(state, now)))?.title.slice(0, 160) ?? null
   };
 }
 
@@ -712,7 +803,7 @@ export function setAutoAppPreset(state, id) {
 // (APP-03). Null when no session with a preset is running.
 export function appLimitSnapshot(state, now = new Date()) {
   const apps = state.focus?.apps;
-  if (!isFocused(state.focus, now.getTime()) || !apps) return null;
+  if (!isSessionRunning(state.focus, now.getTime()) || !apps) return null;
   return {
     endAt: state.focus.endAt,
     presetId: apps.presetId ?? null,
@@ -925,6 +1016,7 @@ export function exportSync(state, device, now = new Date()) {
       blockRules: state.blockRules ?? [],
       pendingRuleChanges: state.pendingRuleChanges ?? [],
       appPresets: state.appPresets ?? [],
+      focusSegments: state.focusSegments ?? [],
       stamps: state.stamps,
       supersedes: state.supersedes,
       tasks: state.tasks,
@@ -960,6 +1052,13 @@ function validatePayload(payload) {
     if (typeof preset?.id !== 'string' || typeof preset.name !== 'string' || !Array.isArray(preset.apps)) {
       throw new Error('The sync file contains an invalid app preset.');
     }
+  }
+  if (payload.data.focusSegments !== undefined) {
+    const list = payload.data.focusSegments;
+    const bad = !Array.isArray(list) || list.some((segment) => !segment || typeof segment !== 'object'
+      || ['id', 'sessionId', 'start', 'end', 'deviceId'].some((key) => typeof segment[key] !== 'string')
+      || !(typeof segment.taskId === 'string' || segment.taskId === null));
+    if (bad) throw new Error('The sync file contains an invalid focus record.');
   }
 }
 
@@ -1054,6 +1153,12 @@ export function mergeSync(state, payload, ctx) {
     }
   }
 
+  const segments = new Map();
+  for (const segment of [...(state.focusSegments ?? []), ...(remote.focusSegments ?? [])]) {
+    if (!segments.has(segment.id)) segments.set(segment.id, segment);
+  }
+  const focusSegments = [...segments.values()].filter((segment) => !(segment.taskId && deleted[segment.taskId]));
+
   const devices = { ...state.devices };
   for (const [id, device] of Object.entries(remote.devices ?? {})) {
     if (!devices[id] || device.lastSeenAt > devices[id].lastSeenAt) devices[id] = device;
@@ -1066,6 +1171,7 @@ export function mergeSync(state, payload, ctx) {
     ...state,
     ...root,
     tasks,
+    focusSegments,
     workouts: [...workouts.values()].filter((workout) => !deleted[workout.id]),
     deleted,
     devices,
@@ -1383,6 +1489,50 @@ export function deliveryReview(state, startDay, endDay) {
     onTimeRate: dueInRange.length ? onTime.length / dueInRange.length : null,
     quality: Object.fromEntries(REVIEW_RESULTS.map((result) => [result, completed
       .filter((task) => (task.review?.result ?? 'unreviewed') === result).length]))
+  };
+}
+
+function focusMs(state, now, include) {
+  const items = (state.focusSegments ?? []).filter(include)
+    .map((segment) => ({ taskId: segment.taskId, ms: Math.max(0, Date.parse(segment.end) - Date.parse(segment.start)) }));
+  const focus = state.focus;
+  if (focus && !focus.endedAt && focus.segmentStart != null) {
+    const start = new Date(focus.segmentStart).toISOString();
+    const ms = Math.min(now.getTime(), focus.endAt) - focus.segmentStart;
+    if (ms > 0 && include({ start, taskId: focus.taskId ?? null })) items.push({ taskId: focus.taskId ?? null, ms });
+  }
+  return items;
+}
+
+export function taskFocusMinutes(state, taskId, now = new Date()) {
+  const ms = focusMs(state, now, (segment) => segment.taskId === taskId).reduce((sum, item) => sum + item.ms, 0);
+  return Math.round(ms / 60_000);
+}
+
+export function focusTimeReview(state, startDay, endDay, now = new Date()) {
+  const timeZone = state.settings?.timeZone;
+  const items = focusMs(state, now, (segment) => {
+    const day = localDate(new Date(segment.start), timeZone);
+    return day >= startDay && day <= endDay;
+  });
+  const perTask = new Map();
+  let wandering = 0;
+  for (const item of items) {
+    if (item.taskId == null) wandering += item.ms;
+    else perTask.set(item.taskId, (perTask.get(item.taskId) ?? 0) + item.ms);
+  }
+  const byTask = [];
+  for (const [taskId, ms] of perTask) {
+    const task = state.tasks.find((item) => item.id === taskId);
+    const minutes = Math.round(ms / 60_000);
+    if (task && minutes > 0) byTask.push({ taskId, title: task.title, minutes });
+  }
+  byTask.sort((a, b) => b.minutes - a.minutes || a.title.localeCompare(b.title));
+  const wanderingMinutes = Math.round(wandering / 60_000);
+  return {
+    byTask,
+    wanderingMinutes,
+    totalMinutes: byTask.reduce((sum, item) => sum + item.minutes, 0) + wanderingMinutes
   };
 }
 

@@ -43,8 +43,13 @@
         <section class="focus panel" aria-labelledby="focus-label">
           <div class="focus-heading"><h2 class="eyebrow" id="focus-label" data-i18n="today.focusTitle">Focus session</h2><span class="focus-dot" aria-hidden="true"></span></div>
           <p class="focus-time" id="focus-time"></p>
+          <label for="focus-task" class="visually-hidden" id="focus-task-label" data-i18n="focusTask.label">Task for this session</label>
+          <select id="focus-task"></select>
+          <p id="focus-current" class="focus-status" hidden></p>
           <select id="focus-preset" data-i18n-aria-label="apps.todayLabel" aria-label="Apps for this session" hidden></select>
           <button type="button" class="button focus-button" id="start-focus" data-i18n="today.startFocus">Start focus</button>
+          <button type="button" class="button focus-button" id="pause-focus" data-i18n="focusTask.pause" hidden>Pause</button>
+          <button type="button" class="button focus-button" id="end-focus" data-i18n="focusTask.end" hidden>End session</button>
           <p id="focus-status" class="focus-status" role="status"></p>
         </section>
       </div>
@@ -129,6 +134,7 @@
             <div><label for="detail-input-deadline" data-i18n="detail.deadline">Deadline</label><input id="detail-input-deadline" name="deadline" type="datetime-local"></div>
           </div>
           <p id="detail-original-deadline" class="muted" hidden></p>
+          <p id="detail-focus-time" class="muted"></p>
           <label for="detail-input-next" data-i18n="detail.nextStep">Next step</label>
           <input id="detail-input-next" name="nextStep" maxlength="200" placeholder="The very next physical action" data-i18n-placeholder="detail.nextStepPlaceholder">
           <label for="detail-input-criteria" data-i18n="detail.criteria">Completion criteria</label>
@@ -227,6 +233,11 @@
       <section class="tasks-section" aria-labelledby="quality-summary-label">
         <h2 id="quality-summary-label" data-i18n="review.quality">Completion quality</h2>
         <p id="quality-summary" class="muted"></p>
+      </section>
+      <section class="tasks-section" aria-labelledby="focus-review-label">
+        <h2 id="focus-review-label" data-i18n="focusTask.reviewTitle">Focus time</h2>
+        <ul id="focus-review-list" class="task-list"></ul>
+        <p class="muted" id="focus-review-empty" hidden data-i18n="focusTask.reviewEmpty">No focus time in this period.</p>
       </section>
       <section class="tasks-section" aria-labelledby="rescheduled-label">
         <h2 id="rescheduled-label" data-i18n="review.rescheduled">Rescheduled</h2>
