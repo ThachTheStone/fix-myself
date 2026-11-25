@@ -1676,8 +1676,9 @@ async function boot() {
   if (desktop?.platform === 'win32') element('windows-settings').hidden = false;
   if (desktop) element('browser-settings').hidden = false;
   if (presetsEnabled()) element('app-presets').hidden = false;
-  if (desktop?.loginLaunch) state = onLogin(state);
+  // Settle first so a session left open while the app was closed is recorded with this device's id.
   state = settleFocus(state, ctx());
+  if (desktop?.loginLaunch) state = onLogin(state);
   desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
   saveState(localStorage, state);
   currentDay = planningDay(state);

@@ -1057,7 +1057,8 @@ function validatePayload(payload) {
     const list = payload.data.focusSegments;
     const bad = !Array.isArray(list) || list.some((segment) => !segment || typeof segment !== 'object'
       || ['id', 'sessionId', 'start', 'end', 'deviceId'].some((key) => typeof segment[key] !== 'string')
-      || !(typeof segment.taskId === 'string' || segment.taskId === null));
+      || !(typeof segment.taskId === 'string' || segment.taskId === null)
+      || !(Date.parse(segment.end) > Date.parse(segment.start)));
     if (bad) throw new Error('The sync file contains an invalid focus record.');
   }
 }

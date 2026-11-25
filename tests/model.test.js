@@ -447,4 +447,11 @@ test('focus segments sync by id and respect deleted tasks', () => {
   assert.doesNotThrow(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')));
   old.data.focusSegments = [{ id: 'x', sessionId: 's', taskId: 5, start: 'a', end: 'b', deviceId: 'd' }];
   assert.throws(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')), /invalid focus record/);
+  // Dates that do not parse, or a segment that ends before it starts, would break the review.
+  const segment = { id: 'x', sessionId: 's', taskId: null, deviceId: 'd' };
+  for (const [start, end] of [['garbage', 'zzz'], ['2026-11-19T10:00:00Z', '2026-11-19T09:00:00Z'],
+    ['2026-11-19T10:00:00Z', '2026-11-19T10:00:00Z']]) {
+    old.data.focusSegments = [{ ...segment, start, end }];
+    assert.throws(() => mergeSync(fresh(), old, ctx('2026-11-19T11:01:00Z', 'phone')), /invalid focus record/);
+  }
 });
