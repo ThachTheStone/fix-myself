@@ -122,10 +122,15 @@ State cục bộ chuyển từ `version: 2` sang `version: 3`, kèm hàm chuyể
 | `focusSegments`: `[{ id, sessionId, taskId, start, end, deviceId }]` | Có, gộp theo `id` | FOC-10, FOC-11 | Xóa task thì xóa các đoạn của nó bằng tombstone. |
 | `workBlock.strict` | Có, đi cùng trường `workBlocks` của task | WB-01 | Mọi thay đổi làm block strict không còn phủ khoảng thời gian cũ đều phải đi qua `pendingBlockChanges` với cùng `changeDelay`: bỏ `strict`, xóa block, bắt đầu muộn hơn, kết thúc sớm hơn (kể cả dời sớm mà giữ nguyên độ dài). Trong lúc giữ phiên, không xóa được việc con chưa xong. |
 | `pendingBlockChanges`: `[{ id, taskId, blockId, block, effectiveAt, createdAt }]` | Có, là trường gốc (ghi bằng `setRoot`) | WB-01 | `block` là block mới hoặc `null` khi xóa. `applyPendingBlockChanges` áp dụng khi đến hạn và bỏ mục hỏng. Một lần sửa mới vào cùng block thay thế mục đang chờ, nên mục chờ không ghi đè lần sửa sau. |
-
-**Giới hạn đã biết của WB.** Quy tắc chờ chỉ được kiểm tra trong model của bản này. Một file đồng bộ tự chế hoặc một bản app cũ mang dấu sửa mới hơn cho `workBlocks` có thể bỏ `strict` ngay khi gộp, vì gộp chỉ so dấu sửa. `pendingBlockChanges` gộp kiểu bản ghi sau thắng, nên hai thiết bị cùng xếp chờ có thể mất một mục; khi đó block giữ nguyên, tức là lỗi nghiêng về phía an toàn. Với độ trễ `next-day`, đổi múi giờ kế hoạch có thể làm thời điểm áp dụng đến sớm hơn; lỗi này có từ trước và ảnh hưởng cả quy tắc chặn (BLK-06).
 | `strictLog`: `[{ id, blockId, taskId, outcome, reason, at }]` | Có, gộp theo `id` | WB-04 | `outcome` thuộc `STRICT_OUTCOMES`: `on_time`, `extended`, `limit_reached`, `exited`, `canceled`, `missed`. |
-| `miniTimer`: `{ enabled, x, y, clickThrough }` | Không | FOC-12 | |
+| `preferences.miniTimer`: `{ enabled, clickThrough }` | Không | FOC-12 | Vị trí cửa sổ do tiến trình chính lưu ở `mini-timer.json` trong thư mục dữ liệu của app. |
+
+**Giới hạn đã biết của WB.**
+
+- Quy tắc chờ chỉ được kiểm tra trong model của bản này. Một file đồng bộ tự chế hoặc một bản app cũ mang dấu sửa mới hơn cho `workBlocks` có thể bỏ `strict` ngay khi gộp, vì gộp chỉ so dấu sửa.
+- `pendingBlockChanges` gộp kiểu bản ghi sau thắng, nên hai thiết bị cùng xếp chờ có thể mất một mục. Khi đó block giữ nguyên, tức là lỗi nghiêng về phía an toàn.
+- Khóa việc con chỉ có hiệu lực trong lúc giữ phiên. Trước khi block bắt đầu, người dùng có thể đặt tiêu chí hoàn thành rồi xóa các việc con chưa xong. Đến giờ block, họ chỉ cần bấm hoàn thành.
+- Với độ trễ `next-day`, đổi múi giờ kế hoạch có thể làm thời điểm áp dụng đến sớm hơn. Lỗi này có từ trước và ảnh hưởng cả quy tắc chặn (BLK-06).
 
 Phần desktop cần thêm:
 
