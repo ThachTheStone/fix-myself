@@ -1019,6 +1019,7 @@ const ERRORS_VI = {
   'Add subtasks or completion criteria before making a block strict.': 'Thêm việc con hoặc tiêu chí hoàn thành trước khi đặt khối nghiêm ngặt.',
   'Remove strict from this task’s work blocks first.': 'Hãy bỏ chế độ nghiêm ngặt khỏi các khối làm việc của việc này trước.',
   'Tick every subtask before completing this task.': 'Hãy tích xong mọi việc con trước khi hoàn thành việc này.',
+  'Open subtasks cannot be removed during a strict block.': 'Không thể xóa việc con chưa xong trong khối nghiêm ngặt.',
   'A strict block is holding this session.': 'Một khối nghiêm ngặt đang giữ phiên này.',
   'Wait for the countdown to finish.': 'Hãy chờ đếm ngược kết thúc.',
   'Enter a reason to exit.': 'Nhập lý do thoát.',

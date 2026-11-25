@@ -506,9 +506,17 @@ test('WB-01: loosening a strict block waits for the change delay', () => {
     assert.equal(next.pendingBlockChanges[0].blockId, 'blk', name);
     assert.equal(next.pendingBlockChanges[0].block?.end ?? null, workBlocks[0] ? new Date(workBlocks[0].end).toISOString() : null, name);
   }
-  const earlier = saveTask(state, id, { workBlocks: [{ ...BLOCK, start: '2026-11-19T09:50:00Z', end: '2026-11-19T10:20:00Z' }] }, ctx(T0));
+  // Starting earlier while keeping the end still covers the block, so it applies at once.
+  const earlier = saveTask(state, id, { workBlocks: [{ ...BLOCK, start: '2026-11-19T09:50:00Z' }] }, ctx(T0));
   assert.equal(blockOf(earlier).start, '2026-11-19T09:50:00.000Z');
   assert.equal(earlier.pendingBlockChanges.length, 0);
+  // Moving earlier at the same length ends the hold earlier; moving it into the past would skip it. Both wait.
+  for (const moved of [{ start: '2026-11-19T09:50:00Z', end: '2026-11-19T10:20:00Z' },
+    { start: '2026-11-19T05:00:00Z', end: '2026-11-19T05:30:00Z' }]) {
+    const next = saveTask(state, id, { workBlocks: [{ ...BLOCK, ...moved }] }, ctx(T0));
+    assert.deepEqual(blockOf(next), BLOCK);
+    assert.equal(next.pendingBlockChanges.length, 1);
+  }
   const longer = saveTask(state, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T10:45:00Z' }] }, ctx(T0));
   assert.equal(blockOf(longer).end, '2026-11-19T10:45:00.000Z');
   assert.equal(longer.pendingBlockChanges.length, 0);
@@ -545,6 +553,24 @@ test('WB-01: pending block changes apply when due, drop with the task, and can b
   const canceled = cancelPendingBlockChange(queued, queued.pendingBlockChanges[0].id, ctx(T0));
   assert.equal(canceled.pendingBlockChanges.length, 0);
   assert.equal(cancelPendingBlockChange(canceled, 'nope', ctx(T0)), canceled);
+
+  // A later edit to the same block replaces the waiting change, so the change cannot undo it.
+  const shortened = saveTask(state, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T10:10:00Z' }] }, ctx(T0));
+  const extended = saveTask(shortened, id, { workBlocks: [{ ...BLOCK, end: '2026-11-19T11:00:00Z' }] }, ctx('2026-11-19T09:01:00Z'));
+  assert.equal(extended.pendingBlockChanges.length, 0);
+  const later = applyPendingBlockChanges(extended, ctx('2026-11-19T09:20:00Z'));
+  assert.equal(blockOf(later).end, '2026-11-19T11:00:00.000Z');
+  // An edit elsewhere in the task keeps the waiting change.
+  const renamed = saveTask(shortened, id, { title: 'Renamed' }, ctx('2026-11-19T09:01:00Z'));
+  assert.equal(renamed.pendingBlockChanges.length, 1);
+});
+
+test('WB-01: a new block cannot reuse the id of a logged strict block', () => {
+  const { state, id } = strictTask();
+  const logged = { ...state, strictLog: [{ id: 'e1', blockId: 'reused', taskId: id, outcome: 'missed', reason: '', at: T0 }] };
+  const next = saveTask(logged, id, { workBlocks: [BLOCK, { ...BLOCK, id: 'reused', start: '2026-11-19T12:00:00Z', end: '2026-11-19T13:00:00Z' }] }, ctx(T0));
+  assert.equal(next.tasks[0].workBlocks.length, 2);
+  assert.ok(next.tasks[0].workBlocks.every((block) => block.id !== 'reused'));
 });
 
 test('WB-01: a task with an open strict block cannot be deleted or canceled', () => {
@@ -584,6 +610,13 @@ test('WB-02: completing during the hold needs every subtask and logs on_time', (
   const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
   assert.throws(() => saveTask(held, id, { status: 'completed' }, ctx('2026-11-19T10:10:00Z')),
     /Tick every subtask/);
+  // Deleting the open subtask (criteria would still satisfy WB-01) must not open a way out.
+  const withCriteria = saveTask(held, id, { criteria: 'Sent' }, ctx('2026-11-19T10:05:00Z'));
+  assert.throws(() => saveTask(withCriteria, id, { subtasks: [] }, ctx('2026-11-19T10:06:00Z')),
+    /Open subtasks cannot be removed/);
+  const added = saveTask(held, id, { subtasks: [...held.tasks[0].subtasks, { id: 's2', title: 'Check', done: false }] },
+    ctx('2026-11-19T10:06:00Z'));
+  assert.equal(added.tasks[0].subtasks.length, 2);
   let done = saveTask(held, id, { subtasks: tickedDone }, ctx('2026-11-19T10:10:00Z'));
   done = saveTask(done, id, { status: 'completed' }, ctx('2026-11-19T10:11:00Z'));
   const ticked = tickStrict(done, ctx('2026-11-19T10:12:00Z'));

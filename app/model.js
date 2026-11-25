@@ -414,10 +414,11 @@ export function activePriorities(state, exceptId) {
 const isOpenStrict = (block, nowMs) => Boolean(block.strict) && Date.parse(block.end) > nowMs;
 
 // Does replacing block `old` with `replacement` (undefined when removed) loosen it?
+// Only a strict block that still covers the old time is as strong: moving a
+// block earlier ends the hold earlier, so it loosens too.
 function weakensBlock(old, replacement) {
   if (!replacement || !replacement.strict) return true;
-  const length = (block) => Date.parse(block.end) - Date.parse(block.start);
-  return length(replacement) < length(old) || Date.parse(replacement.start) > Date.parse(old.start);
+  return Date.parse(replacement.start) > Date.parse(old.start) || Date.parse(replacement.end) < Date.parse(old.end);
 }
 
 export function saveTask(state, id, changes, ctx) {
@@ -441,6 +442,21 @@ export function saveTask(state, id, changes, ctx) {
   }
   let queued = null;
   if (ctx?.applyingPending !== true) {
+    // Removing an open subtask would let the task be completed without doing it.
+    if (existing && holdsTask) {
+      const kept = new Set(after.subtasks.map((subtask) => subtask.id));
+      if (before.subtasks.some((subtask) => !subtask.done && !kept.has(subtask.id))) {
+        throw new Error('Open subtasks cannot be removed during a strict block.');
+      }
+    }
+    // A new block may not reuse the id of a logged strict block or another task's block,
+    // or it would never be held.
+    const taken = new Set([
+      ...(state.strictLog ?? []).map((entry) => entry.blockId),
+      ...state.tasks.filter((task) => task.id !== before.id).flatMap((task) => (task.workBlocks ?? []).map((block) => block.id))
+    ]);
+    const own = new Set(before.workBlocks.map((block) => block.id));
+    after.workBlocks = after.workBlocks.map((block) => (!own.has(block.id) && taken.has(block.id) ? { ...block, id: newId() } : block));
     const earlier = new Map(before.workBlocks.map((block) => [block.id, block]));
     for (const block of after.workBlocks) {
       if (block.strict && !earlier.get(block.id)?.strict && Date.parse(block.end) <= nowMs) {
@@ -448,25 +464,31 @@ export function saveTask(state, id, changes, ctx) {
       }
     }
     const delay = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
-    if (delay !== 0 && existing) {
+    if (existing) {
+      // A later edit to a block replaces its waiting change, so a waiting change
+      // never overwrites a newer edit. The new edit is judged again below.
+      const current = state.pendingBlockChanges ?? [];
+      const touched = new Set(before.workBlocks
+        .filter((old) => !same(old, after.workBlocks.find((block) => block.id === old.id)))
+        .map((old) => old.id));
+      let pending = current.filter((change) => !(change.taskId === before.id && touched.has(change.blockId)));
       let blocks = after.workBlocks;
-      let pending = state.pendingBlockChanges ?? [];
       let weakened = false;
-      for (const old of before.workBlocks) {
-        if (!isOpenStrict(old, nowMs)) continue;
-        const replacement = after.workBlocks.find((block) => block.id === old.id);
-        if (!weakensBlock(old, replacement)) continue;
-        weakened = true;
-        blocks = [...blocks.filter((block) => block.id !== old.id), old];
-        pending = [...pending.filter((change) => change.blockId !== old.id), {
-          id: newId(), taskId: before.id, blockId: old.id, block: replacement ?? null,
-          effectiveAt: delayMoment(state, c, delay), createdAt: c.at
-        }];
+      if (delay !== 0) {
+        for (const old of before.workBlocks) {
+          if (!isOpenStrict(old, nowMs)) continue;
+          const replacement = after.workBlocks.find((block) => block.id === old.id);
+          if (!weakensBlock(old, replacement)) continue;
+          weakened = true;
+          blocks = [...blocks.filter((block) => block.id !== old.id), old];
+          pending = [...pending.filter((change) => change.blockId !== old.id), {
+            id: newId(), taskId: before.id, blockId: old.id, block: replacement ?? null,
+            effectiveAt: delayMoment(state, c, delay), createdAt: c.at
+          }];
+        }
       }
-      if (weakened) {
-        after.workBlocks = blocks.sort((a, b) => a.start.localeCompare(b.start));
-        queued = pending;
-      }
+      if (weakened) after.workBlocks = blocks.sort((a, b) => a.start.localeCompare(b.start));
+      if (weakened || pending.length !== current.length) queued = pending;
     }
     if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))
         && after.subtasks.length === 0 && !after.criteria) {
@@ -1822,7 +1844,11 @@ export function applyPendingBlockChanges(state, ctx) {
     const workBlocks = change.block
       ? task.workBlocks.map((block) => (block.id === change.blockId ? change.block : block))
       : task.workBlocks.filter((block) => block.id !== change.blockId);
-    next = saveTask(next, task.id, { workBlocks }, { now: c.now, device: c.device, applyingPending: true });
+    try {
+      next = saveTask(next, task.id, { workBlocks }, { now: c.now, device: c.device, applyingPending: true });
+    } catch {
+      // A damaged entry is dropped below instead of failing on every tick.
+    }
   }
   const dueIds = new Set(due.map((change) => change.id));
   return setRoot(next, 'pendingBlockChanges', pending.filter((change) => !dueIds.has(change.id)), c);
@@ -1839,7 +1865,7 @@ export function tickStrict(state, ctx) {
   const added = [];
   const holdBlockId = state.focus?.strict?.blockId;
   for (const task of state.tasks) {
-    for (const block of task.workBlocks) {
+    for (const block of task.workBlocks ?? []) {
       const end = Date.parse(block.end);
       if (!block.strict || logged.has(block.id) || block.id === holdBlockId || end > nowMs) continue;
       const done = task.completedAt && Date.parse(task.completedAt) <= end;
@@ -1855,7 +1881,8 @@ export function tickStrict(state, ctx) {
       log(task.completedAt && Date.parse(task.completedAt) <= hold.blockEnd ? 'on_time' : 'extended');
       focus = { ...focus, strict: null };
     } else if (!task || task.status === 'canceled') {
-      log('canceled');
+      // A task deleted by sync takes its log entries with it, so only a cancel is logged.
+      if (task) log('canceled');
       focus = { ...focus, strict: null };
     } else {
       let holdUntil = hold.holdUntil;
@@ -1888,7 +1915,7 @@ export function tickStrict(state, ctx) {
   let chosen = null;
   for (const task of next.tasks) {
     if (!isActive(task)) continue;
-    for (const block of task.workBlocks) {
+    for (const block of task.workBlocks ?? []) {
       if (!block.strict || logged.has(block.id)) continue;
       const start = Date.parse(block.start);
       if (start > nowMs || nowMs >= Date.parse(block.end)) continue;

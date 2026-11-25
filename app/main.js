@@ -1756,9 +1756,14 @@ async function boot() {
   if (desktop) element('browser-settings').hidden = false;
   if (presetsEnabled()) element('app-presets').hidden = false;
   // Settle first so a session left open while the app was closed is recorded with this device's id.
-  state = applyPendingBlockChanges(state, ctx());
-  if (!nativeReminders) state = tickStrict(state, ctx());
-  state = settleFocus(state, ctx());
+  // A damaged local record must not stop Today from opening; the interval retries and reports.
+  try {
+    state = applyPendingBlockChanges(state, ctx());
+    if (!nativeReminders) state = tickStrict(state, ctx());
+    state = settleFocus(state, ctx());
+  } catch (error) {
+    reportError(error);
+  }
   if (desktop?.loginLaunch) state = onLogin(state);
   desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
   saveState(localStorage, state);
