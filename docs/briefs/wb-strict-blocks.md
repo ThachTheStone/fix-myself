@@ -22,7 +22,7 @@ block waits for the change delay. The weekly review lists how each strict block 
 ## Decisions already made
 
 **Constants** (`app/model.js`): `STRICT_EXTENSION_MINUTES = 15`, `STRICT_EXIT_SECONDS = 120`,
-`STRICT_OUTCOMES = ['on_time', 'extended', 'limit_reached', 'exited', 'canceled']`.
+`STRICT_OUTCOMES = ['on_time', 'extended', 'limit_reached', 'exited', 'canceled', 'missed']`.
 
 **Data**. State stays `version: 3`; `migrateState` defaults any missing new field.
 - Work block: `{ id, start, end, strict }`. `validateChanges` keeps `strict: Boolean(block.strict)`. It is part of
@@ -44,6 +44,9 @@ block waits for the change delay. The weekly review lists how each strict block 
 
 **WB-01: strictness and weakening** (inside `saveTask`, after `after` is built)
 - An "open strict block" is one with `strict` and `end > now`.
+- A block can become strict only while `end > now`. That covers a new strict block and turning `strict` on for an
+  existing block. Otherwise throw `'Only upcoming work blocks can be strict.'` A block that ended while strict keeps
+  its flag.
 - If `after` has any open strict block and has no subtasks and empty `criteria`, throw
   `'Add subtasks or completion criteria before making a block strict.'` This also stops removing the last subtask or
   the criteria from such a task.
@@ -68,6 +71,10 @@ block waits for the change delay. The weekly review lists how each strict block 
   `'Tick every subtask before completing this task.'` when any subtask is not done.
 
 **WB-02 and WB-03: the hold**. New `tickStrict(state, ctx)` returns the same object when nothing changes.
+0. Missed blocks, on every tick: look for strict blocks of an existing task that have `end <= now`, have no `strictLog`
+   entry for their `blockId`, and are not the block of the active hold. Log one entry for each, with `at` set to the
+   block's `end`. The outcome is `on_time` when the task's `completedAt` is set and `<= end`, and `missed` otherwise.
+   This catches blocks that passed while the app was closed.
 1. With an active hold (`focus.strict` set):
    - If its task is `completed`: log `on_time` when `completedAt <= blockEnd`, else `extended`, then clear the hold.
    - If its task is missing or `canceled`: log `canceled`, then clear the hold.
@@ -96,7 +103,7 @@ block waits for the change delay. The weekly review lists how each strict block 
   at least `STRICT_EXIT_SECONDS` have passed. Trim the reason; throw `'Enter a reason to exit.'` if it is empty or over
   200 characters. Log `exited` with the reason and clear the hold. Website blocking is untouched.
 - New `strictReview(state, startDay, endDay)`: log entries whose `at` falls on a planning day in the range. Returns
-  `{ counts: { on_time, extended, limit_reached, exited, canceled }, exits: [{ at, title, reason }] }`, with exits
+  `{ counts: { on_time, extended, limit_reached, exited, canceled, missed }, exits: [{ at, title, reason }] }`, with exits
   newest first and `title` taken from the task.
 
 **UI** (`index.html`, `app/main.js`)
@@ -118,7 +125,7 @@ block waits for the change delay. The weekly review lists how each strict block 
 - Errors from the model show in the existing feedback places. Add each new error to `ERRORS_VI`.
 - Review: a "Strict blocks" section after "Focus time":
   - The line "{on_time} on time · {extended} after extension · {limit_reached} reached the limit · {exited} exited ·
-    {canceled} canceled".
+    {canceled} canceled · {missed} missed".
   - Then each exit as "{date} · {title}: {reason}".
   - When all counts are 0, show the empty state "No strict blocks in this period."
 - All new strings go through `t()` in English and Vietnamese under the `strict.` prefix. Text is set as text, never as
@@ -139,7 +146,6 @@ block waits for the change delay. The weekly review lists how each strict block 
 - Opening the task workspace at the hold start (WS-02 is not built), the calendar marker (PLAN-01), the floating
   countdown (FOC-12).
 - `extension/*`, `desktop/*`, block rules, presets, reminders, `SRS.md`.
-- Strict blocks missed entirely while the app was closed: they get no log entry.
 
 ## Tests that define "done"
 - `tests/model.test.js`, new cases:
@@ -162,6 +168,8 @@ block waits for the change delay. The weekly review lists how each strict block 
     with the reason, the hold is cleared, and `blockUntil` is unchanged. A block already in `strictLog` does not start
     again.
   - A task canceled on another device (applied through `mergeSync`) logs `canceled` on the next tick.
+  - Missed: a strict block that ended while no tick ran logs `missed` once, with `at` set to its end. If the task was
+    completed before the block's end, it logs `on_time` instead. Marking a block that already ended as strict throws.
   - Sync: `strictLog` unions by id and drops entries of deleted tasks. `pendingBlockChanges` merges as a root field.
     An invalid entry of either throws. A payload without the new fields merges.
   - `strictReview` counts by planning day and lists exits newest first.
