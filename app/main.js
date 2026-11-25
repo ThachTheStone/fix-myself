@@ -1,5 +1,6 @@
 import {
-  activeBlockRules, addToToday, applyPendingRuleChanges, cancelPendingRuleChange, captureTask, chromeCoverage,
+  activeBlockRules, addToToday, applyPendingBlockChanges, applyPendingRuleChanges, cancelPendingBlockChange,
+  cancelPendingRuleChange, cancelStrictExit, exitStrictHold, requestStrictExit, strictReview, STRICT_EXIT_SECONDS, tickStrict, captureTask, chromeCoverage,
   CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteAppPreset, deleteBlockRule, distractionReview,
   recordChromeReports, ruleReview,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
@@ -205,6 +206,18 @@ function checkRuleChanges() {
   if (next !== state) applyState(next);
 }
 
+// Applies due block changes, runs the strict hold, then settles the session.
+function checkStrict() {
+  try {
+    let next = applyPendingBlockChanges(state, ctx());
+    if (!nativeReminders) next = tickStrict(next, ctx());
+    next = settleFocus(next, ctx());
+    if (next !== state) applyState(next);
+  } catch (error) {
+    reportError(error);
+  }
+}
+
 function focusDuration(minutes) {
   if (minutes < 60) return t('common.minutesShort', { n: minutes });
   return t('focusTask.hoursMinutes', { h: Math.floor(minutes / 60), m: minutes % 60 });
@@ -229,6 +242,21 @@ function renderFocusTask(running) {
   select.value = tasks.some((task) => task.id === previous) ? previous : nextActive;
 }
 
+function renderStrictExit(hold, now) {
+  const asked = hold?.exitRequestedAt != null;
+  element('strict-exit').hidden = !hold || asked;
+  element('strict-exit-panel').hidden = !asked;
+  if (!asked) {
+    element('strict-reason').value = '';
+    return;
+  }
+  const left = Math.max(0, Math.ceil((hold.exitRequestedAt + STRICT_EXIT_SECONDS * 1000 - now) / 1000));
+  element('strict-countdown').textContent = t('strict.countdown', {
+    time: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
+  });
+  element('strict-exit-confirm').disabled = left > 0;
+}
+
 function renderTimer(now = Date.now()) {
   const running = isSessionRunning(state.focus, now);
   const blocking = isFocused(state.focus, now);
@@ -236,9 +264,11 @@ function renderTimer(now = Date.now()) {
   const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   element('focus-time').textContent = remaining;
   element('start-focus').hidden = running;
-  element('pause-focus').hidden = !running;
-  element('end-focus').hidden = !running;
+  const hold = running ? state.focus.strict ?? null : null;
+  element('pause-focus').hidden = !running || Boolean(hold);
+  element('end-focus').hidden = !running || Boolean(hold);
   renderFocusTask(running);
+  renderStrictExit(hold, now);
   const paused = running && state.focus.segmentStart == null;
   const pauseLabel = t(paused ? 'focusTask.resume' : 'focusTask.pause');
   if (element('pause-focus').textContent !== pauseLabel) element('pause-focus').textContent = pauseLabel;
@@ -246,7 +276,11 @@ function renderTimer(now = Date.now()) {
   current.hidden = !running;
   if (running) {
     const task = state.focus.taskId ? state.tasks.find((item) => item.id === state.focus.taskId) : null;
-    const text = task ? t('focusTask.working', { title: task.title }) : t('focusTask.wandering');
+    const text = hold
+      ? now >= hold.blockEnd
+        ? t('strict.extended', { time: timeOnly.format(new Date(hold.holdUntil)), limit: timeOnly.format(new Date(hold.limit)) })
+        : t('strict.holding', { title: task?.title ?? '', time: timeOnly.format(new Date(hold.holdUntil)) })
+      : task ? t('focusTask.working', { title: task.title }) : t('focusTask.wandering');
     if (current.textContent !== text) current.textContent = text;
   }
   element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !running);
@@ -508,7 +542,16 @@ function renderDetail(fresh) {
       const startInput = h('input', { type: 'datetime-local', value: toLocalInput(block.start), 'aria-label': t('detail.blockStart', { n: index + 1 }) });
       const endInput = h('input', { type: 'datetime-local', value: toLocalInput(block.end), 'aria-label': t('detail.blockEnd', { n: index + 1 }) });
       return h('li', { class: 'block' },
-        h('p', { class: 'strong', text: formatRange(block.start, block.end) }),
+        h('p', { class: 'strong', text: formatRange(block.start, block.end) + (block.strict ? ' · ' + t('strict.tag') : '') }),
+        h('label', { class: 'check-label' },
+          h('input', {
+            type: 'checkbox', checked: Boolean(block.strict),
+            onchange: (event) => {
+              if (!editTask({
+                workBlocks: task.workBlocks.map((other) => other.id === block.id ? { ...other, strict: event.target.checked } : other)
+              }, element('block-feedback'))) event.target.checked = !event.target.checked;
+            }
+          }), ' ', t('strict.tag')),
         h('div', { class: 'field-row' }, startInput, endInput),
         h('div', { class: 'task-actions' },
           h('button', {
@@ -522,6 +565,24 @@ function renderDetail(fresh) {
             type: 'button', class: 'text-button', text: t('common.remove'),
             onclick: () => editTask({ workBlocks: task.workBlocks.filter((other) => other.id !== block.id) }, element('block-feedback'))
           })));
+    }));
+  }
+
+  const waiting = (state.pendingBlockChanges ?? []).filter((change) => change.taskId === task.id);
+  if (!cached('detail:pendingBlocks', waiting)) {
+    element('block-pending').replaceChildren(...waiting.map((change) => {
+      const old = task.workBlocks.find((block) => block.id === change.blockId);
+      const time = formatTime(change.effectiveAt);
+      const text = change.block
+        ? t('strict.pendingChange', { time, range: formatRange(change.block.start, change.block.end) })
+          + (change.block.strict ? '' : ' ' + t('strict.notStrict'))
+        : t('strict.pendingRemove', { time, range: old ? formatRange(old.start, old.end) : '' });
+      return h('li', { class: 'block' },
+        h('p', { class: 'muted', text }),
+        h('button', {
+          type: 'button', class: 'text-button', text: t('common.cancel'),
+          onclick: () => attempt(() => cancelPendingBlockChange(state, change.id, ctx()))
+        }));
     }));
   }
 
@@ -583,6 +644,15 @@ function renderReview() {
     ...(focusReview.wanderingMinutes > 0 ? [h('li', { class: 'task' },
       h('p', { class: 'task-title', text: t('focusTask.reviewWandering', { duration: focusDuration(focusReview.wanderingMinutes) }) }))] : [])
   ] : []));
+  const strict = strictReview(state, reviewStart, end);
+  const strictTotal = Object.values(strict.counts).reduce((sum, count) => sum + count, 0);
+  element('strict-review-empty').hidden = strictTotal > 0;
+  element('strict-review-counts').hidden = strictTotal === 0;
+  element('strict-review-counts').textContent = strictTotal > 0 ? t('strict.reviewCounts', strict.counts) : '';
+  element('strict-review-list').replaceChildren(...strict.exits.map((item) => h('li', { class: 'task' },
+    h('p', { class: 'task-title', text: t('strict.reviewExit', {
+      date: formatDay(localDate(new Date(item.at), state.settings?.timeZone)), title: item.title, reason: item.reason
+    }) }))));
   renderDistractions(end);
   renderRuleReview(end);
   renderAppReview(end);
@@ -1437,6 +1507,15 @@ function wireToday() {
   element('end-focus').addEventListener('click', () => {
     attempt(() => endFocus(state, ctx()));
   });
+  element('strict-exit').addEventListener('click', () => {
+    attempt(() => requestStrictExit(state, ctx()));
+  });
+  element('strict-stay').addEventListener('click', () => {
+    attempt(() => cancelStrictExit(state, ctx()));
+  });
+  element('strict-exit-confirm').addEventListener('click', () => {
+    attempt(() => exitStrictHold(state, element('strict-reason').value, ctx()));
+  });
   element('next-select').addEventListener('change', (event) => {
     attempt(() => setNextAction(state, event.target.value || null, ctx()));
   });
@@ -1496,9 +1575,9 @@ function wireDetail() {
   });
   element('block-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    const { start, end } = event.target.elements;
+    const { start, end, strict } = event.target.elements;
     const task = state.tasks.find((item) => item.id === currentTaskId);
-    if (editTask({ workBlocks: [...task.workBlocks, { start: fromLocalInput(start.value), end: fromLocalInput(end.value) }] },
+    if (editTask({ workBlocks: [...task.workBlocks, { start: fromLocalInput(start.value), end: fromLocalInput(end.value), strict: strict.checked }] },
       element('block-feedback'), t('detail.blockAdded'))) event.target.reset();
   });
   element('review-form').addEventListener('submit', (event) => {
@@ -1677,6 +1756,8 @@ async function boot() {
   if (desktop) element('browser-settings').hidden = false;
   if (presetsEnabled()) element('app-presets').hidden = false;
   // Settle first so a session left open while the app was closed is recorded with this device's id.
+  state = applyPendingBlockChanges(state, ctx());
+  if (!nativeReminders) state = tickStrict(state, ctx());
   state = settleFocus(state, ctx());
   if (desktop?.loginLaunch) state = onLogin(state);
   desktop?.setBackground?.(state.preferences.keepRunning).catch(reportError);
@@ -1705,8 +1786,7 @@ async function boot() {
   setInterval(() => {
     tick += 1;
     checkRuleChanges();
-    const settled = settleFocus(state, ctx());
-    if (settled !== state) applyState(settled);
+    checkStrict();
     if (planningDay(state) !== currentDay) render();
     else renderTimer();
     if (tick % 15 === 0) checkReminders();

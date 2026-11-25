@@ -44,6 +44,10 @@ Pairing uses an authenticated loopback connection. The desktop app shares the ac
 
 Each paired profile reports back the days it was running and a daily count of blocked visits per domain. It sends no URLs, page content or browsing history. **Settings → Pair Chrome** lists each profile as covered or unavailable, and **Review** shows blocked attempts by site, marks days with no report, and compares with the previous week only when both weeks are fully covered. Name a profile in the extension popup so you can tell profiles apart.
 
+## Strict work blocks
+
+A work block can be marked **Strict** when the task has subtasks or completion criteria. When it starts, Fix Myself holds a focus session on that task: no Pause, End session or task change. If the task is still open at the end, the hold extends in 15-minute steps up to twice the block's length. **Emergency exit** asks for a 2-minute wait and a reason. Removing strict, shortening or moving a block later waits for the change delay in Settings. The weekly review lists how each strict block ended.
+
 ## Block rules
 
 **Settings → Block rules** keeps sites closed outside focus sessions. Name a rule, list its sites as domains (one per line, up to 30), and choose a schedule: **Always**, or **Scheduled** with time windows on the days you pick. Times follow the planning time zone, and a window that crosses midnight belongs to the day it starts. Under **When a listed site opens**, **Block it** sends the page straight to the intervention page, while **Pause, then allow a pass** counts down first and then opens a pass for a few minutes.
