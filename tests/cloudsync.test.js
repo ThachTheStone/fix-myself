@@ -146,7 +146,7 @@ function makeStorage() {
 
 function makeDevice(server, id, options = {}) {
   const dev = {
-    id, name: `Device ${id}`, server, clock: { ms: T0 }, store: options.store ?? new Map(), statuses: [], backups: [], applied: [],
+    id, name: `Device ${id}`, server, clock: { ms: T0 }, store: options.store ?? new Map(), statuses: [], backups: [], backupSources: [], applied: [],
     session: { user: options.user ?? USER1 }, timers: makeTimers(), merge: options.merge, online: true
   };
   const base = readState(makeStorage());
@@ -166,7 +166,7 @@ function makeDevice(server, id, options = {}) {
     device: { id, name: dev.name },
     now: dev.now,
     onStatus: (status) => dev.statuses.push(status),
-    saveBackup: (payload) => { dev.backups.push(payload); },
+    saveBackup: (payload, source) => { dev.backups.push(payload); dev.backupSources.push(source); },
     timers: dev.timers,
     isOnline: () => dev.online,
     events: null,
@@ -415,15 +415,15 @@ test('another account: no server call happens before the choice, and replace res
   assert.ok(Object.keys(b.state.peers).length > 0);
   b.session.user = USER2;
   const rpcs = server.rpcLog.length;
-  const reads = server.reads;
   await b.engine.start();
   assert.equal(b.last().status, 'account-changed');
   assert.equal(b.last().email, USER2.email);
+  const reads = server.reads; // the prompt itself reads the new account once, to know whether it has a plan
   await b.engine.syncNow();
   b.engine.noteLocalChange();
   await b.engine.syncNow();
   assert.equal(server.rpcLog.length, rpcs, 'no rpc before the choice');
-  assert.equal(server.reads, reads, 'no read before the choice');
+  assert.equal(server.reads, reads, 'no further read before the choice');
   await b.engine.chooseLink('replace');
   assert.equal(b.backups.length, 1);
   assert.equal(b.store.get('cloud.account'), 'user-2');
@@ -949,4 +949,92 @@ test('merging keeps conflicts surfaced and drops ones another device resolved', 
   await settle([a, b]);
   assert.ok(a.state.conflicts.length + b.state.conflicts.length > 0, 'a conflict is surfaced on at least one device');
   assert.ok(converged(a, b));
+});
+
+test('an empty new account reports serverHasData false, and upload binds it and pushes this plan without clearing', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, false);
+  const before = titles(b);
+  assert.ok(before.length > 0);
+  await b.engine.chooseLink('upload');
+  assert.equal(b.store.get('cloud.account'), 'user-2');
+  assert.deepEqual(titles(b), before, 'nothing was cleared');
+  assert.equal(b.backups.length, 0, 'no replace, so no backup');
+  assert.equal(server.row('user-2').payload.data.tasks.length, before.length);
+  assert.equal(b.last().status, 'synced');
+});
+
+test('an account with a plan reports serverHasData true and refuses upload', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, true);
+  await assert.rejects(() => b.engine.chooseLink('upload'), /only for an account with no plan/);
+});
+
+test('data that appears between the prompt and the upload choice turns it into the replace prompt, and nothing is pushed', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false);
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  const pushes = server.rpcLog.filter((call) => call.name === 'push_sync_doc').length;
+  await b.engine.chooseLink('upload');
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, true);
+  assert.equal(b.store.get('cloud.account'), 'user-1', 'still not bound to the new account');
+  assert.equal(server.rpcLog.filter((call) => call.name === 'push_sync_doc').length, pushes);
+});
+
+test('upload into an account that holds only an erase marker keeps the marker for its other devices', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  const erasedAt = '2026-11-19T07:00:00.000Z';
+  const now = new Date(T0);
+  const empty = exportSync(clearSyncedData(b.state, now), 'dev-x', now);
+  server.rows.set('user-2', { payload: { ...empty, erasedAt }, rev: 3 });
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false, 'a marker counts as empty');
+  await b.engine.chooseLink('upload');
+  assert.equal(b.store.get('cloud.account'), 'user-2');
+  assert.equal(server.row('user-2').payload.erasedAt, erasedAt, 'the marker stays on the uploaded plan');
+  assert.equal(b.store.get('cloud.eraseSeen'), erasedAt, 'this device does not ask about that erase');
+  assert.ok(server.row('user-2').payload.data.tasks.length > 0);
+});
+
+test('upload pushes once against the revision it read, and a conflict leaves the device unbound with the replace prompt', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false);
+  server.nullPushes = 1;
+  const pushes = server.rpcLog.filter((call) => call.name === 'push_sync_doc').length;
+  await b.engine.chooseLink('upload');
+  const calls = server.rpcLog.filter((call) => call.name === 'push_sync_doc');
+  assert.equal(calls.length, pushes + 1, 'one push only');
+  assert.equal(calls.at(-1).args.expected_rev, 0);
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, true);
+  assert.equal(b.store.get('cloud.account'), 'user-1', 'not rebound after a conflict');
+});
+
+test('a backup records the account whose plan it holds, or null for an unbound device', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  await b.engine.start();
+  await b.engine.chooseLink('replace');
+  assert.deepEqual(b.backupSources, [{ uid: 'user-1' }]);
+  const server2 = makeServer();
+  const c = makeDevice(server2, 'dev-c');
+  c.edit((state, ctx) => captureTask(state, { title: 'Local only' }, ctx));
+  server2.rows.set('user-1', structuredClone((await pair()).server.row('user-1')));
+  await c.engine.start();
+  assert.equal(c.last().status, 'link-needed');
+  await c.engine.chooseLink('replace');
+  assert.deepEqual(c.backupSources, [{ uid: null }]);
 });

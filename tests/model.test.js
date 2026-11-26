@@ -1447,6 +1447,16 @@ test('SYS-05: a plain erase refuses during a focus session or strict hold', () =
   const held = { ...idle, focus: { sessionId: 's', taskId: null, endAt: 1, blockUntil: 1, endedAt: 1, strict: { blockId: 'b', taskId: 't' } } };
   assert.throws(() => eraseUserData(held, at(T).getTime()), /Erase after the focus session ends\./);
 });
+
+test('SYS-05: a plain erase refuses while block rules or waiting rule changes are active', () => {
+  const T = '2026-11-19T10:05:00Z';
+  const withRule = saveBlockRule(fresh(), null,
+    { name: 'Evening news', domains: 'news.example', schedule: { type: 'always' }, strength: 'block' }, ctx(T));
+  assert.throws(() => eraseUserData(withRule, at(T).getTime()), /Turn off block rules and strict blocks on this device first/);
+  const off = { ...withRule, blockRules: withRule.blockRules.map((rule) => ({ ...rule, enabled: false })) };
+  if (!protectionsActive(off, at(T))) assert.doesNotThrow(() => eraseUserData(off, at(T).getTime()));
+});
+
 // ---------------------------------------------------------------------------
 // Completion criteria checklist (TASK-01, WB-01, REV-02, SRS 0.8)
 import { criteriaItems, foldAllCriteria, foldTaskCriteria, strictEligible } from '../app/model.js';

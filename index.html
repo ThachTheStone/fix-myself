@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f6f5ef">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co">
   <title>Fix Myself</title>
   <link rel="stylesheet" href="/app/styles.css">
   <script type="module" src="/app/main.js"></script>
@@ -532,6 +532,49 @@
         <button type="button" class="button secondary" id="notify-exact" hidden data-i18n="settings.allowExact">Allow exact timing</button>
       </section>
 
+      <section class="panel settings-panel" id="cloud" aria-labelledby="cloud-title">
+        <h2 id="cloud-title" data-i18n="cloud.title">Account sync</h2>
+        <form id="cloud-config" hidden>
+          <p class="muted" data-i18n="cloud.help">Set up a Supabase project first; see docs/SUPABASE.md</p>
+          <label for="cloud-url" data-i18n="cloud.url">Project URL</label>
+          <input id="cloud-url" autocomplete="off" spellcheck="false" placeholder="https://abcdefghijklmnopqrst.supabase.co">
+          <label for="cloud-key" data-i18n="cloud.anonKey">Anon or publishable key</label>
+          <input id="cloud-key" type="password" autocomplete="off" spellcheck="false">
+          <button type="submit" class="button primary" data-i18n="cloud.save">Save connection</button>
+          <button type="button" class="text-button" id="cloud-config-cancel" hidden data-i18n="cloud.link.cancel">Cancel</button>
+        </form>
+        <form id="cloud-signin" hidden>
+          <label for="cloud-email" data-i18n="cloud.email">Email</label>
+          <div class="inline-fields">
+            <input id="cloud-email" type="email" autocomplete="email">
+            <button type="button" class="button secondary" id="cloud-send" data-i18n="cloud.sendCode">Send code</button>
+          </div>
+          <label for="cloud-code" data-i18n="cloud.code">Code</label>
+          <div class="inline-fields">
+            <input id="cloud-code" autocomplete="off" spellcheck="false">
+            <button type="submit" class="button primary" data-i18n="cloud.signIn">Sign in</button>
+          </div>
+          <p class="muted" data-i18n="cloud.codeHelp">Paste the code, or right-click the link in the email and copy it. Do not open the link.</p>
+          <button type="button" class="text-button" id="cloud-change" data-i18n="cloud.changeConnection">Change connection</button>
+        </form>
+        <div id="cloud-account" hidden>
+          <p id="cloud-user" class="strong"></p>
+          <div class="button-group">
+            <button type="button" class="button secondary" id="cloud-sync-now" data-i18n="cloud.syncNow">Sync now</button>
+            <button type="button" class="button secondary" id="cloud-signout" data-i18n="cloud.signOut">Sign out</button>
+          </div>
+        </div>
+        <p id="cloud-status" role="status"></p>
+        <p id="cloud-skew" class="muted" hidden></p>
+        <div id="cloud-prompt" role="alert" hidden></div>
+        <div id="cloud-backup" hidden>
+          <p class="muted" data-i18n="cloud.backupSaved">A copy of this device's plan was saved before replacing it</p>
+          <p class="muted" data-i18n="cloud.restoreHelp">Restoring merges this copy into the current plan.</p>
+          <ul id="cloud-backup-list" class="compact-list"></ul>
+        </div>
+        <p id="cloud-feedback" class="feedback" role="status"></p>
+      </section>
+
       <section class="panel settings-panel" id="sync" aria-labelledby="sync-title">
         <h2 id="sync-title" data-i18n="settings.sync">Devices and sync</h2>
         <p class="muted" data-i18n="settings.syncHelp">Move your plan between devices with a sync file. Changes merge by field. If both devices changed the same field, you choose which value to keep. Deleted tasks stay deleted.</p>
@@ -572,11 +615,12 @@
 
       <section class="panel settings-panel" aria-labelledby="data-title">
         <h2 id="data-title" data-i18n="settings.data">Your data</h2>
-        <p data-i18n="settings.dataHelp">Your plan is stored on this device. It leaves the device only when you download or copy a sync file. Workout photos stay on the device that added them. Chrome receives only the focus end time, blocked domains and the next action title.</p>
+        <p data-i18n="settings.dataHelp">Your plan is stored on this device. It leaves the device when you download or copy a sync file, and it also syncs to your own Supabase project when you sign in under Account sync. Workout photos stay on the device that added them. Chrome receives only the focus end time, blocked domains and the next action title.</p>
         <div class="button-group">
           <button type="button" class="button secondary" id="export-data" data-i18n="settings.export">Export my data</button>
           <button type="button" class="button secondary danger" id="erase-data" data-i18n="settings.erase">Delete all my data</button>
         </div>
+        <p id="erase-blocked" class="muted" hidden data-i18n="cloud.eraseBlocked">Sign in to erase this plan everywhere.</p>
         <p id="data-feedback" class="feedback" role="status"></p>
       </section>
     </section>

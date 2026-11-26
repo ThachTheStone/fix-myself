@@ -25,6 +25,13 @@ import extensionManifest from '../extension/manifest.json';
 import { calendarDays, rangeToBlock, resizedBlock, shiftBlockDays, snap } from './calendar.js';
 import { startOfDay } from '../extension/block-schedule.js';
 import { clearPhotos, deletePhoto, photoUrl, savePhoto } from './photos.js';
+import { createCloudSync } from './cloud-sync.js';
+import {
+  changeConnection, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput, readCloudConfig,
+  restoreBackup, restoreNeedsConfirm,
+  saveCloudConfig, sessionStorageFor, shouldNoteChange, signOutSequence
+} from './cloud.js';
+import { deleteBackups, listBackups, saveBackup } from './cloud-backup.js';
 import {
   detectLanguage, getLanguage, LANGUAGE_KEY, LANGUAGES, locale, setLanguage, t, translateDocument, translateError
 } from './i18n.js';
@@ -56,6 +63,13 @@ let tick = 0;
 const sectionCache = new Map();
 const collapsedTasks = new Set();
 const photoUrls = new Map();
+let cloud = null; // { config, client, engine, unsubscribe } once a Supabase project is connected
+let cloudStatus = { status: 'signed-out' };
+let cloudPrompt = null; // the link, account-change or erase prompt that is open
+let cloudSkew = null;
+let cloudUser = null;
+let cloudBackups = []; // saved copies of this device's plan, newest first
+let cloudChanging = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -115,9 +129,12 @@ function reminderLine(reminder) {
   return t(reminder.kind === 'deadline' ? 'reminder.due' : 'reminder.start', { title });
 }
 
-function applyState(nextState) {
+// fromSync is true when the account's copy is being installed; that never marks the plan as changed.
+function applyState(nextState, { fromSync = false } = {}) {
+  const previous = state;
   saveState(localStorage, nextState);
   state = nextState;
+  if (!fromSync && cloud && shouldNoteChange(previous, nextState)) cloud.engine.noteLocalChange();
   render();
   syncWorkspaces();
 }
@@ -2026,6 +2043,7 @@ function render() {
   if (currentView === 'calendar') renderCalendar();
   if (currentView === 'review') renderReview();
   renderSettingsLists();
+  renderCloud();
   renderCoverage();
   renderRules();
   renderPresets();
@@ -2366,18 +2384,27 @@ function wireSettings() {
   });
   element('erase-data').addEventListener('click', (event) => {
     confirmTwice(event.currentTarget, 'settings.erase', async () => {
-      let erased;
-      try {
-        erased = eraseUserData(state);
-      } catch (error) {
-        element('data-feedback').textContent = translateError(error.message);
+      const feedback = element('data-feedback');
+      // A bound plan must be erased while signed in; otherwise the account copy would return at the next sign-in.
+      if (cloudBound() && !(cloud && cloudUser)) {
+        feedback.textContent = t('cloud.eraseBlocked');
         return;
       }
-      await clearPhotos().catch(reportError);
+      const everywhere = Boolean(cloud && cloudUser && cloudBound());
+      try {
+        await eraseAll({
+          state, engine: cloud?.engine, everywhere, deleteBackup: deleteBackups, clearPhotos, onCleanupError: reportError,
+          plainErase: () => applyState(registerDevice(eraseUserData(state), { ...device, platform: platformName() }))
+        });
+      } catch (error) {
+        feedback.textContent = translateError(error.message);
+        return;
+      }
       photoUrls.clear();
       sectionCache.clear();
-      applyState(registerDevice(erased, { ...device, platform: platformName() }));
-      element('data-feedback').textContent = t('settings.erased');
+      cloudBackups = [];
+      render();
+      feedback.textContent = t(everywhere ? 'cloud.erasedEverywhere' : 'settings.erased');
     });
   });
   element('copy-pairing').addEventListener('click', async () => {
@@ -2402,6 +2429,311 @@ function wireSettings() {
     if (currentView === 'task') renderDetail(false);
     if (currentView === 'settings') refreshNotifications().catch(reportError);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Account sync (SYS-02, SYS-03, SYS-05, SYS-06). The engine lives in cloud-sync.js; this
+// part connects it to the Supabase client, the saved state and the Settings panel.
+
+const cloudStore = engineStore(localStorage);
+// cloud.account in the engine store is the binding of this device to an account. state.cloudAccount only
+// marks a replace that was interrupted before the binding was recorded, so it must not be used for this.
+const cloudBound = () => cloudStore.get('cloud.account') != null;
+const CLOUD_ERRORS = ['bad-remote', 'update-app', 'busy', 'server', 'paused', 'loop', 'protected', 'backup', 'apply'];
+const PROMPTS = ['link-needed', 'account-changed', 'erased'];
+
+function setCloudStatus(next) {
+  if (next.status === 'clock-skew') {
+    cloudSkew = next.minutes;
+  } else {
+    cloudStatus = next;
+    if (PROMPTS.includes(next.status)) cloudPrompt = next;
+    else if (['syncing', 'synced', 'signed-out'].includes(next.status)) cloudPrompt = null;
+    if (next.status === 'signed-out') cloudSkew = null;
+  }
+  renderCloud();
+}
+
+function startCloud(config) {
+  const client = createCloudClient(config, sessionStorageFor(desktop, localStorage));
+  const engine = createCloudSync({
+    client,
+    store: cloudStore,
+    // The engine reads the name when it exports, so a rename shows up without a restart.
+    device: { get id() { return device.id; }, get name() { return device.name; } },
+    getState: () => state,
+    applyMerged: (next) => {
+      applyState(registerDevice(next, { ...device, platform: platformName() }), { fromSync: true });
+    },
+    onStatus: setCloudStatus,
+    saveBackup: async (payload, source) => {
+      await saveBackup(payload, source?.uid ? { uid: source.uid, email: knownEmail(source.uid) } : null);
+      await refreshBackups();
+    }
+  });
+  const handler = createAuthHandler({
+    engine,
+    setStatus: setCloudStatus,
+    onSession: (session) => {
+      if (session?.user?.id && session.user.email) rememberEmail(session.user.id, session.user.email);
+      cloudUser = session?.user ? { email: session.user.email ?? '' } : null;
+      renderCloud();
+    }
+  });
+  const { data } = client.auth.onAuthStateChange(handler);
+  cloud = { config, client, engine, auth: handler, unsubscribe: () => data.subscription.unsubscribe() };
+  cloudStatus = { status: 'signed-out' };
+  cloudPrompt = null;
+  cloudSkew = null;
+  cloudUser = null;
+  renderCloud();
+}
+
+function cloudStatusText(status) {
+  switch (status.status) {
+    case 'syncing': return t('cloud.status.syncing');
+    case 'synced': return t('cloud.status.synced', { time: formatTime(status.at) });
+    case 'offline': return t('cloud.status.offline');
+    case 'error': {
+      const message = translateError(status.message ?? '');
+      return CLOUD_ERRORS.includes(status.code) ? t('cloud.status.error.' + status.code, { message }) : message;
+    }
+    default: return '';
+  }
+}
+
+async function answerCloud(action) {
+  if (!cloud) return;
+  try {
+    await action();
+  } catch (error) {
+    element('cloud-feedback').textContent = translateError(error.message);
+  }
+}
+
+async function signOutCloud() {
+  await signOutSequence({ client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus, auth: cloud.auth });
+  cloudUser = null;
+  renderCloud();
+}
+
+function cloudPromptView() {
+  if (!cloudPrompt) return null;
+  if (cloudPrompt.status === 'erased') {
+    return h('div', {},
+      h('p', { text: t('cloud.erased.text', {
+        device: cloudPrompt.deviceName ?? t('cloud.anotherDevice'),
+        time: cloudPrompt.erasedAt ? formatTime(cloudPrompt.erasedAt) : ''
+      }) }),
+      h('div', { class: 'button-group' },
+        h('button', { type: 'button', class: 'button primary', text: t('cloud.erased.here'),
+          onclick: () => answerCloud(async () => {
+            await cloud.engine.chooseErase('erase-here');
+            // A refusal is reported as an error and keeps the prompt open.
+            if (cloud.engine.status().status === 'error') return;
+            cloudPrompt = null;
+            cloudBackups = [];
+            await deleteBackups().catch(reportError);
+            renderCloud();
+            await cloud.engine.syncNow();
+          }) }),
+        h('button', { type: 'button', class: 'button secondary', text: t('cloud.erased.upload'),
+          onclick: () => answerCloud(() => cloud.engine.chooseErase('upload-again')) })));
+  }
+  if (cloudPrompt.status === 'account-changed' && cloudPrompt.serverHasData === false) {
+    // An empty account: uploading keeps this plan, so it is offered but never as the default.
+    return h('div', {},
+      h('p', { text: t('cloud.upload.text') }),
+      h('div', { class: 'button-group' },
+        h('button', { type: 'button', class: 'button secondary', text: t('cloud.upload.button'),
+          onclick: () => answerCloud(() => cloud.engine.chooseLink('upload')) }),
+        h('button', { type: 'button', class: 'button secondary', text: t('cloud.link.cancel'),
+          onclick: () => answerCloud(async () => {
+            await cloud.engine.chooseLink('cancel');
+            await signOutCloud();
+          }) })));
+  }
+  return h('div', {},
+    h('p', { text: t('cloud.link.text') }),
+    h('div', { class: 'button-group' },
+      h('button', { type: 'button', class: 'button primary', text: t('cloud.link.replace'),
+        onclick: () => answerCloud(() => cloud.engine.chooseLink('replace')) }),
+      h('button', { type: 'button', class: 'button secondary', text: t('cloud.link.cancel'),
+        onclick: () => answerCloud(async () => {
+          await cloud.engine.chooseLink('cancel');
+          await signOutCloud();
+        }) })));
+}
+
+function renderCloud() {
+  const configured = Boolean(cloud);
+  const signedIn = configured && Boolean(cloudUser);
+  element('cloud-config').hidden = configured && !cloudChanging;
+  element('cloud-config-cancel').hidden = !cloudChanging;
+  element('cloud-signin').hidden = !configured || signedIn || cloudChanging;
+  element('cloud-account').hidden = !signedIn || cloudChanging;
+  element('cloud-user').textContent = signedIn ? t('cloud.signedInAs', { email: cloudUser.email }) : '';
+  element('cloud-status').textContent = cloudChanging ? '' : cloudStatusText(cloudStatus);
+  const skew = element('cloud-skew');
+  skew.hidden = cloudSkew === null || !signedIn;
+  skew.textContent = cloudSkew === null ? '' : t('cloud.clockSkew', { minutes: cloudSkew });
+  element('cloud-backup').hidden = cloudBackups.length === 0;
+  if (!cached('cloud-backups', [cloudBackups.map((item) => [item.id, item.source?.email ?? null]), getLanguage()])) {
+    element('cloud-backup-list').replaceChildren(...cloudBackups.map((item) => h('li', {},
+      h('p', { class: 'strong', text: [formatTime(item.savedAt), item.source?.email].filter(Boolean).join(' · ') }),
+      h('div', { class: 'task-actions' },
+        h('button', { type: 'button', class: 'text-button', text: t('cloud.restore'), onclick: (event) => askRestore(event.currentTarget, item) }),
+        h('button', { type: 'button', class: 'text-button', text: t('cloud.download'), onclick: () => downloadBackup(item) })))));
+  }
+  const prompt = element('cloud-prompt');
+  prompt.hidden = !cloudPrompt;
+  if (!cached('cloud-prompt', [cloudPrompt, getLanguage()])) {
+    const view = cloudPromptView();
+    prompt.replaceChildren(...(view ? [view] : []));
+  }
+  // A plan bound to an account must be erased while signed in, or the account copy would return.
+  const blocked = configured && !signedIn && cloudBound();
+  element('erase-data').disabled = blocked;
+  element('erase-blocked').hidden = !blocked;
+}
+
+// The account emails this device has signed in with, so a backup can say whose plan it holds. Device-local.
+const EMAILS_KEY = 'fix-myself:cloud-emails';
+function knownEmail(uid) {
+  try {
+    return JSON.parse(localStorage.getItem(EMAILS_KEY))?.[uid] ?? null;
+  } catch {
+    return null;
+  }
+}
+function rememberEmail(uid, email) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EMAILS_KEY)) ?? {};
+    if (saved[uid] !== email) localStorage.setItem(EMAILS_KEY, JSON.stringify({ ...saved, [uid]: email }));
+  } catch {
+    localStorage.setItem(EMAILS_KEY, JSON.stringify({ [uid]: email }));
+  }
+}
+
+async function refreshBackups() {
+  cloudBackups = await listBackups().catch(() => []);
+  renderCloud();
+}
+
+function downloadBackup(item) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(item.payload)], { type: 'application/json' }));
+  const day = String(item.savedAt).slice(0, 10);
+  const link = h('a', { href: url, download: `fix-myself-backup-${day}.json` });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+// A merge, not a replace: the copy is folded into the current plan and the result uploads like any edit.
+// A copy from another account asks a second time before it is merged into this one.
+function askRestore(button, item) {
+  const feedback = element('cloud-feedback');
+  if (restoreNeedsConfirm(item, cloudStore.get('cloud.account')) && button.dataset.armed !== 'true') {
+    button.dataset.armed = 'true';
+    feedback.textContent = t('cloud.restoreConfirm', { email: item.source.email ?? t('cloud.anotherAccount') });
+    setTimeout(() => { button.dataset.armed = 'false'; }, 8000);
+    return;
+  }
+  button.dataset.armed = 'false';
+  try {
+    applyState(restoreBackup(state, item.payload, ctx()).state);
+    feedback.textContent = t('cloud.restored');
+  } catch (error) {
+    feedback.textContent = translateError(error.message);
+  }
+}
+
+function wireCloud() {
+  const feedback = element('cloud-feedback');
+  const fail = (error) => { feedback.textContent = translateError(error?.message ?? String(error)); };
+  const saved = readCloudConfig(localStorage);
+  if (saved) startCloud(saved);
+  refreshBackups();
+
+  element('cloud-config').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    feedback.textContent = '';
+    const entered = { url: element('cloud-url').value, anonKey: element('cloud-key').value };
+    try {
+      if (cloud) {
+        await changeConnection({
+          client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus, auth: cloud.auth, unsubscribe: cloud.unsubscribe,
+          storage: localStorage, config: entered,
+          build: (clean) => { cloud = null; startCloud(clean); }
+        });
+      } else {
+        startCloud(saveCloudConfig(localStorage, entered));
+      }
+      cloudChanging = false;
+      element('cloud-key').value = '';
+      renderCloud();
+      feedback.textContent = t('cloud.saved');
+    } catch (error) {
+      fail(error);
+    }
+  });
+  element('cloud-config-cancel').addEventListener('click', () => {
+    cloudChanging = false;
+    feedback.textContent = '';
+    renderCloud();
+  });
+  element('cloud-change').addEventListener('click', () => {
+    cloudChanging = true;
+    element('cloud-url').value = cloud?.config.url ?? '';
+    element('cloud-key').value = '';
+    feedback.textContent = '';
+    renderCloud();
+  });
+  element('cloud-send').addEventListener('click', async () => {
+    feedback.textContent = '';
+    const email = element('cloud-email').value.trim();
+    if (!email) {
+      feedback.textContent = translateError('Enter your email address.');
+      return;
+    }
+    try {
+      const { error } = await cloud.client.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      if (error) throw error;
+      feedback.textContent = t('cloud.codeSent');
+    } catch (error) {
+      fail(error);
+    }
+  });
+  element('cloud-signin').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    feedback.textContent = '';
+    try {
+      const input = parseSignInInput(element('cloud-code').value, cloud.config.url);
+      let result;
+      if (input.kind === 'link') {
+        result = await cloud.client.auth.verifyOtp({ token_hash: input.token_hash, type: input.type });
+      } else {
+        const email = element('cloud-email').value.trim();
+        if (!email) throw new Error('Enter your email address.');
+        result = await cloud.client.auth.verifyOtp({ email, token: input.token, type: 'email' });
+      }
+      if (result.error) throw result.error;
+      element('cloud-code').value = '';
+    } catch (error) {
+      fail(error);
+    }
+  });
+  element('cloud-sync-now').addEventListener('click', () => answerCloud(() => cloud.engine.syncNow()));
+  element('cloud-signout').addEventListener('click', () => answerCloud(signOutCloud));
+  element('cloud-email').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    element('cloud-send').click();
+  });
+
+  // Test hook for the browser suite: feeds a status without a network or an engine. Only with ?cloudtest.
+  if (location.search.includes('cloudtest')) window.__cloudTest = { status: setCloudStatus };
 }
 
 async function boot() {
@@ -2441,9 +2773,11 @@ async function boot() {
   wirePresets();
   wireAppLimits();
   wireSettings();
+  wireCloud();
   window.addEventListener('hashchange', navigate);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
+      cloud?.engine.syncNow();
       checkRuleChanges();
       render();
       checkReminders();
