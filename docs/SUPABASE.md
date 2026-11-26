@@ -54,5 +54,10 @@ Chrome và hoạt động app, vị trí đồng hồ nổi, mã ghép nối Chr
 - Xóa dữ liệu trong Settings của app (SYS-05) thay bản trên server bằng một dấu "đã xóa". Mỗi máy khác sẽ hỏi bạn: xóa
   luôn ở máy đó, hay đưa kế hoạch của máy đó lên lại.
 - Một máy đã có kế hoạch riêng, lần đầu đăng nhập vào tài khoản đã có dữ liệu, sẽ được thay bằng bản trên tài khoản.
-  Trước khi thay, app lưu một file đồng bộ của máy đó để bạn gộp lại thủ công nếu cần.
+  Trước khi thay, app lưu một bản sao kế hoạch của máy đó trong mục "Đồng bộ tài khoản" (tối đa 5 bản, bản cũ nhất bị bỏ
+  khi vượt). Mỗi bản có nút Khôi phục và Tải xuống. Khôi phục gộp bản đó vào kế hoạch hiện tại, không thay thế; kết quả
+  được đồng bộ lên như mọi chỉnh sửa. Mọi cách xóa dữ liệu đều xóa các bản sao này.
+- Khi đổi sang tài khoản hoặc project khác, nếu tài khoản mới chưa có kế hoạch, app hỏi có đưa kế hoạch của máy này lên
+  không. Đưa lên không xóa gì trên máy; nếu lúc bạn xác nhận tài khoản đã có dữ liệu, app hỏi lại theo lựa chọn thay
+  thế.
 - Trên Android, phiên đăng nhập nằm trong bộ nhớ của app, chưa dùng kho bảo vệ của hệ điều hành (giới hạn đã biết).

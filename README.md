@@ -93,7 +93,7 @@ To move your plan between devices, choose **Download sync file** or **Copy sync 
 
 **Settings → Account sync** keeps your plan in step across devices through your own Supabase project. Set the project up first; the steps are in [docs/SUPABASE.md](docs/SUPABASE.md). Then paste the project URL and the anon or publishable key (never the secret key), choose **Save connection**, enter your email and **Send code**, and type the code from the email under **Code**. If the project cannot edit its email templates, paste the sign-in link from the email instead of opening it.
 
-If the account already has a plan, the app asks before replacing this device's plan and saves a copy first. **Delete all my data** erases the account copy too while you are signed in. On Windows the session is stored encrypted; on Android it stays in the app's local storage for now. This has not yet been tried against a real Supabase project.
+If the account already has a plan, the app asks before replacing this device's plan and saves a copy first. The panel keeps the last 5 copies; **Restore** merges a copy into the current plan (it does not replace it) and **Download** saves it as a file. If you sign in to a different, empty account, the app offers to upload this device's plan to it. **Delete all my data** erases the account copy too while you are signed in. On Windows the session is stored encrypted; on Android it stays in the app's local storage for now. This has not yet been tried against a real Supabase project.
 
 ## Android pilot
 

@@ -415,15 +415,15 @@ test('another account: no server call happens before the choice, and replace res
   assert.ok(Object.keys(b.state.peers).length > 0);
   b.session.user = USER2;
   const rpcs = server.rpcLog.length;
-  const reads = server.reads;
   await b.engine.start();
   assert.equal(b.last().status, 'account-changed');
   assert.equal(b.last().email, USER2.email);
+  const reads = server.reads; // the prompt itself reads the new account once, to know whether it has a plan
   await b.engine.syncNow();
   b.engine.noteLocalChange();
   await b.engine.syncNow();
   assert.equal(server.rpcLog.length, rpcs, 'no rpc before the choice');
-  assert.equal(server.reads, reads, 'no read before the choice');
+  assert.equal(server.reads, reads, 'no further read before the choice');
   await b.engine.chooseLink('replace');
   assert.equal(b.backups.length, 1);
   assert.equal(b.store.get('cloud.account'), 'user-2');
@@ -949,4 +949,43 @@ test('merging keeps conflicts surfaced and drops ones another device resolved', 
   await settle([a, b]);
   assert.ok(a.state.conflicts.length + b.state.conflicts.length > 0, 'a conflict is surfaced on at least one device');
   assert.ok(converged(a, b));
+});
+
+test('an empty new account reports serverHasData false, and upload binds it and pushes this plan without clearing', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, false);
+  const before = titles(b);
+  assert.ok(before.length > 0);
+  await b.engine.chooseLink('upload');
+  assert.equal(b.store.get('cloud.account'), 'user-2');
+  assert.deepEqual(titles(b), before, 'nothing was cleared');
+  assert.equal(b.backups.length, 0, 'no replace, so no backup');
+  assert.equal(server.row('user-2').payload.data.tasks.length, before.length);
+  assert.equal(b.last().status, 'synced');
+});
+
+test('an account with a plan reports serverHasData true and refuses upload', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, true);
+  await assert.rejects(() => b.engine.chooseLink('upload'), /only for an account with no plan/);
+});
+
+test('data that appears between the prompt and the upload choice turns it into the replace prompt, and nothing is pushed', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false);
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  const pushes = server.rpcLog.filter((call) => call.name === 'push_sync_doc').length;
+  await b.engine.chooseLink('upload');
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, true);
+  assert.equal(b.store.get('cloud.account'), 'user-1', 'still not bound to the new account');
+  assert.equal(server.rpcLog.filter((call) => call.name === 'push_sync_doc').length, pushes);
 });

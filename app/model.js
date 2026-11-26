@@ -1752,8 +1752,12 @@ export function resolveConflict(state, conflictId, choice, ctx) {
 
 const holdsSession = (state, now) => isFocused(state.focus, now) || Boolean(state.focus?.strict);
 
+const PROTECTIONS_MESSAGE = 'Turn off block rules and strict blocks on this device first; the change delay applies.';
+
 export function eraseUserData(state, now = Date.now()) {
   if (holdsSession(state, now)) throw new Error('Erase after the focus session ends.');
+  // Erasing drops rules and waiting changes at once, so it waits like any other weakening change.
+  if (protectionsActive(state, new Date(now))) throw new Error(PROTECTIONS_MESSAGE);
   const fresh = defaultState();
   return { ...fresh, preferences: state.preferences, settings: state.settings };
 }

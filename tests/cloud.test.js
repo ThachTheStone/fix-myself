@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  changeConnection, CLOUD_KEY, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput,
+  addBackup, changeConnection, CLOUD_KEY, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput,
   readCloudConfig, saveCloudConfig, sessionStorageFor, shouldNoteChange, signOutSequence, validateCloudConfig
 } from '../app/cloud.js';
 import {
@@ -237,4 +237,82 @@ test('a failed erase leaves the backup and photos alone', async () => {
     deleteBackup: async () => log.push('deleteBackup'), clearPhotos: async () => log.push('clearPhotos')
   }), /focus session/);
   assert.deepEqual(log, []);
+});
+
+test('a sign-out that is still stopping does not overwrite a newer sign-in', async () => {
+  const log = [];
+  let releaseStop;
+  const engine = {
+    start: async () => { log.push('start'); },
+    stop: () => new Promise((resolve) => { releaseStop = () => { log.push('stopped'); resolve(); }; })
+  };
+  const statuses = [];
+  const sessions = [];
+  const handler = createAuthHandler({
+    engine, setStatus: (s) => statuses.push(s.status), onSession: (s) => sessions.push(Boolean(s)), defer: (fn) => fn()
+  });
+  handler('SIGNED_IN', { user: {} });
+  handler('SIGNED_OUT', null);
+  handler('SIGNED_IN', { user: {} });
+  releaseStop();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(statuses, [], 'the late sign-out reports nothing');
+  assert.equal(sessions.at(-1), true);
+  assert.deepEqual(log, ['start', 'start', 'stopped']);
+});
+
+test('a deferred step from before a change of connection is ignored', async () => {
+  const queue = [];
+  const engine = fakeEngine();
+  const statuses = [];
+  const sessions = [];
+  const handler = createAuthHandler({
+    engine, setStatus: (s) => statuses.push(s.status), onSession: (s) => sessions.push(s), defer: (fn) => queue.push(fn)
+  });
+  handler('SIGNED_IN', { user: {} });
+  await queue.shift()();
+  const client = fakeClient();
+  client.auth.signOut = async () => { handler('SIGNED_OUT', null); };
+  await changeConnection({
+    client, engine, setStatus: (s) => statuses.push(s.status), auth: handler, storage: memory(),
+    config: { url: URL, anonKey: PUBLISHABLE }, build: () => 'built'
+  });
+  const before = statuses.length;
+  while (queue.length) await queue.shift()();
+  assert.equal(statuses.length, before, 'the old SIGNED_OUT adds no status for the new connection');
+  assert.deepEqual(sessions.filter((s) => s === null), []);
+  // After the change, the guard is reset so a new sign-in starts its engine again.
+  const next = fakeEngine();
+  const second = createAuthHandler({ engine: next, setStatus: () => {}, defer: (fn) => fn() });
+  second('SIGNED_IN', { user: {} });
+  assert.deepEqual(next.log, ['engine.start']);
+});
+
+test('sign-out resets the start guard so the next sign-in starts the engine', async () => {
+  const engine = fakeEngine();
+  const handler = createAuthHandler({ engine, setStatus: () => {}, defer: (fn) => fn() });
+  handler('SIGNED_IN', { user: {} });
+  await signOutSequence({ client: fakeClient(), engine, setStatus: () => {}, auth: handler });
+  handler('SIGNED_IN', { user: {} });
+  assert.deepEqual(engine.log, ['engine.start', 'engine.stop', 'engine.start']);
+});
+
+test('backups keep the newest five, newest first', () => {
+  let list = null;
+  for (let n = 1; n <= 7; n += 1) list = addBackup(list, { n }, new Date(Date.UTC(2026, 10, n)), `id-${n}`);
+  assert.equal(list.length, 5);
+  assert.deepEqual(list.map((item) => item.id), ['id-7', 'id-6', 'id-5', 'id-4', 'id-3']);
+  assert.deepEqual(list[0], { id: 'id-7', savedAt: '2026-11-07T00:00:00.000Z', payload: { n: 7 } });
+});
+
+test('a failed backup or photo cleanup after a successful erase is reported, not thrown', async () => {
+  const log = [];
+  const errors = [];
+  await eraseAll({
+    state: {}, engine: fakeEngine(log), everywhere: true, plainErase: () => {},
+    deleteBackup: async () => { throw new Error('db'); }, clearPhotos: async () => { log.push('clearPhotos'); },
+    onCleanupError: (error) => errors.push(error.message)
+  });
+  assert.deepEqual(errors, ['db']);
+  assert.deepEqual(log, ['engine.erase', 'clearPhotos']);
 });

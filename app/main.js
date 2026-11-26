@@ -30,7 +30,7 @@ import {
   changeConnection, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput, readCloudConfig,
   saveCloudConfig, sessionStorageFor, shouldNoteChange, signOutSequence
 } from './cloud.js';
-import { deleteBackup, readBackup, saveBackup } from './cloud-backup.js';
+import { deleteBackups, listBackups, saveBackup } from './cloud-backup.js';
 import {
   detectLanguage, getLanguage, LANGUAGE_KEY, LANGUAGES, locale, setLanguage, t, translateDocument, translateError
 } from './i18n.js';
@@ -67,7 +67,7 @@ let cloudStatus = { status: 'signed-out' };
 let cloudPrompt = null; // the link, account-change or erase prompt that is open
 let cloudSkew = null;
 let cloudUser = null;
-let cloudHasBackup = false;
+let cloudBackups = []; // saved copies of this device's plan, newest first
 let cloudChanging = false;
 
 // ---------------------------------------------------------------------------
@@ -2380,10 +2380,15 @@ function wireSettings() {
   element('erase-data').addEventListener('click', (event) => {
     confirmTwice(event.currentTarget, 'settings.erase', async () => {
       const feedback = element('data-feedback');
+      // A bound plan must be erased while signed in; otherwise the account copy would return at the next sign-in.
+      if (cloudBound() && !(cloud && cloudUser)) {
+        feedback.textContent = t('cloud.eraseBlocked');
+        return;
+      }
       const everywhere = Boolean(cloud && cloudUser && cloudBound());
       try {
         await eraseAll({
-          state, engine: cloud?.engine, everywhere, deleteBackup, clearPhotos,
+          state, engine: cloud?.engine, everywhere, deleteBackup: deleteBackups, clearPhotos, onCleanupError: reportError,
           plainErase: () => applyState(registerDevice(eraseUserData(state), { ...device, platform: platformName() }))
         });
       } catch (error) {
@@ -2392,7 +2397,7 @@ function wireSettings() {
       }
       photoUrls.clear();
       sectionCache.clear();
-      cloudHasBackup = false;
+      cloudBackups = [];
       render();
       feedback.textContent = t(everywhere ? 'cloud.erasedEverywhere' : 'settings.erased');
     });
@@ -2426,6 +2431,8 @@ function wireSettings() {
 // part connects it to the Supabase client, the saved state and the Settings panel.
 
 const cloudStore = engineStore(localStorage);
+// cloud.account in the engine store is the binding of this device to an account. state.cloudAccount only
+// marks a replace that was interrupted before the binding was recorded, so it must not be used for this.
 const cloudBound = () => cloudStore.get('cloud.account') != null;
 const CLOUD_ERRORS = ['bad-remote', 'update-app', 'busy', 'server', 'paused', 'loop', 'protected', 'backup', 'apply'];
 const PROMPTS = ['link-needed', 'account-changed', 'erased'];
@@ -2456,8 +2463,7 @@ function startCloud(config) {
     onStatus: setCloudStatus,
     saveBackup: async (payload) => {
       await saveBackup(payload);
-      cloudHasBackup = true;
-      renderCloud();
+      await refreshBackups();
     }
   });
   const handler = createAuthHandler({
@@ -2469,7 +2475,7 @@ function startCloud(config) {
     }
   });
   const { data } = client.auth.onAuthStateChange(handler);
-  cloud = { config, client, engine, unsubscribe: () => data.subscription.unsubscribe() };
+  cloud = { config, client, engine, auth: handler, unsubscribe: () => data.subscription.unsubscribe() };
   cloudStatus = { status: 'signed-out' };
   cloudPrompt = null;
   cloudSkew = null;
@@ -2500,7 +2506,7 @@ async function answerCloud(action) {
 }
 
 async function signOutCloud() {
-  await signOutSequence({ client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus });
+  await signOutSequence({ client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus, auth: cloud.auth });
   cloudUser = null;
   renderCloud();
 }
@@ -2520,11 +2526,26 @@ function cloudPromptView() {
             // A refusal is reported as an error and keeps the prompt open.
             if (cloud.engine.status().status === 'error') return;
             cloudPrompt = null;
+            cloudBackups = [];
+            await deleteBackups().catch(reportError);
             renderCloud();
             await cloud.engine.syncNow();
           }) }),
         h('button', { type: 'button', class: 'button secondary', text: t('cloud.erased.upload'),
           onclick: () => answerCloud(() => cloud.engine.chooseErase('upload-again')) })));
+  }
+  if (cloudPrompt.status === 'account-changed' && cloudPrompt.serverHasData === false) {
+    // An empty account: uploading keeps this plan, so it is offered but never as the default.
+    return h('div', {},
+      h('p', { text: t('cloud.upload.text') }),
+      h('div', { class: 'button-group' },
+        h('button', { type: 'button', class: 'button secondary', text: t('cloud.upload.button'),
+          onclick: () => answerCloud(() => cloud.engine.chooseLink('upload')) }),
+        h('button', { type: 'button', class: 'button secondary', text: t('cloud.link.cancel'),
+          onclick: () => answerCloud(async () => {
+            await cloud.engine.chooseLink('cancel');
+            await signOutCloud();
+          }) })));
   }
   return h('div', {},
     h('p', { text: t('cloud.link.text') }),
@@ -2550,7 +2571,14 @@ function renderCloud() {
   const skew = element('cloud-skew');
   skew.hidden = cloudSkew === null || !signedIn;
   skew.textContent = cloudSkew === null ? '' : t('cloud.clockSkew', { minutes: cloudSkew });
-  element('cloud-backup').hidden = !cloudHasBackup;
+  element('cloud-backup').hidden = cloudBackups.length === 0;
+  if (!cached('cloud-backups', [cloudBackups.map((item) => item.id), getLanguage()])) {
+    element('cloud-backup-list').replaceChildren(...cloudBackups.map((item) => h('li', {},
+      h('p', { class: 'strong', text: formatTime(item.savedAt) }),
+      h('div', { class: 'task-actions' },
+        h('button', { type: 'button', class: 'text-button', text: t('cloud.restore'), onclick: () => restoreBackup(item) }),
+        h('button', { type: 'button', class: 'text-button', text: t('cloud.download'), onclick: () => downloadBackup(item) })))));
+  }
   const prompt = element('cloud-prompt');
   prompt.hidden = !cloudPrompt;
   if (!cached('cloud-prompt', [cloudPrompt, getLanguage()])) {
@@ -2563,19 +2591,30 @@ function renderCloud() {
   element('erase-blocked').hidden = !blocked;
 }
 
-async function downloadCloudBackup() {
-  const text = await readBackup();
-  if (!text) {
-    cloudHasBackup = false;
-    renderCloud();
-    return;
-  }
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-  const link = h('a', { href: url, download: `fix-myself-backup-${currentDay}.json` });
+async function refreshBackups() {
+  cloudBackups = await listBackups().catch(() => []);
+  renderCloud();
+}
+
+function downloadBackup(item) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(item.payload)], { type: 'application/json' }));
+  const day = String(item.savedAt).slice(0, 10);
+  const link = h('a', { href: url, download: `fix-myself-backup-${day}.json` });
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+// A merge, not a replace: the copy is folded into the current plan and the result uploads like any edit.
+function restoreBackup(item) {
+  const feedback = element('cloud-feedback');
+  try {
+    applyState(mergeSync(state, item.payload, { ...ctx(), allowOwn: true }).state);
+    feedback.textContent = t('cloud.restored');
+  } catch (error) {
+    feedback.textContent = translateError(error.message);
+  }
 }
 
 function wireCloud() {
@@ -2583,7 +2622,7 @@ function wireCloud() {
   const fail = (error) => { feedback.textContent = translateError(error?.message ?? String(error)); };
   const saved = readCloudConfig(localStorage);
   if (saved) startCloud(saved);
-  readBackup().then((copy) => { cloudHasBackup = Boolean(copy); renderCloud(); }).catch(() => {});
+  refreshBackups();
 
   element('cloud-config').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2592,7 +2631,7 @@ function wireCloud() {
     try {
       if (cloud) {
         await changeConnection({
-          client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus, unsubscribe: cloud.unsubscribe,
+          client: cloud.client, engine: cloud.engine, setStatus: setCloudStatus, auth: cloud.auth, unsubscribe: cloud.unsubscribe,
           storage: localStorage, config: entered,
           build: (clean) => { cloud = null; startCloud(clean); }
         });
@@ -2655,7 +2694,11 @@ function wireCloud() {
   });
   element('cloud-sync-now').addEventListener('click', () => answerCloud(() => cloud.engine.syncNow()));
   element('cloud-signout').addEventListener('click', () => answerCloud(signOutCloud));
-  element('cloud-backup-download').addEventListener('click', () => downloadCloudBackup().catch(fail));
+  element('cloud-email').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    element('cloud-send').click();
+  });
 
   // Test hook for the browser suite: feeds a status without a network or an engine. Only with ?cloudtest.
   if (location.search.includes('cloudtest')) window.__cloudTest = { status: setCloudStatus };

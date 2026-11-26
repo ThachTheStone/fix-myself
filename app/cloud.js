@@ -115,32 +115,51 @@ export const shouldNoteChange = (prev, next) => SYNCED_KEYS.some((key) => prev?.
 
 // supabase-js emits SIGNED_IN again when a tab becomes visible, so the engine
 // is started once per signed-in period. Work is deferred because calling the
-// client from inside the callback can deadlock its auth lock.
+// client from inside the callback can deadlock its auth lock. Each change of
+// signed-in state starts a new epoch; a deferred step from an older epoch does
+// nothing, so a late sign-out cannot overwrite what a newer sign-in reported.
+// TOKEN_REFRESHED and repeated SIGNED_IN do not change the epoch.
+// handler.invalidate() ends the current epoch (used by sign-out and change of connection).
 export function createAuthHandler({ engine, setStatus, onSession = () => {}, defer = (fn) => setTimeout(fn, 0) }) {
   let running = false;
-  return (event, session) => {
+  let epoch = 0;
+  const handler = (event, session) => {
     if ((event === 'INITIAL_SESSION' && session) || event === 'SIGNED_IN') {
-      onSession(session ?? null);
-      if (running) return;
+      if (running) {
+        onSession(session ?? null);
+        return;
+      }
       running = true;
-      defer(() => engine.start());
+      const mine = ++epoch;
+      onSession(session ?? null);
+      defer(() => { if (mine === epoch) return engine.start(); });
     } else if (event === 'INITIAL_SESSION') {
+      // Nothing to call on the client here, so there is nothing to defer.
+      running = false;
+      epoch += 1;
       onSession(null);
       setStatus({ status: 'signed-out' });
     } else if (event === 'SIGNED_OUT') {
       running = false;
-      onSession(null);
+      const mine = ++epoch;
       defer(async () => {
+        if (mine !== epoch) return;
+        onSession(null);
         await engine.stop();
-        setStatus({ status: 'signed-out' });
+        if (mine === epoch) setStatus({ status: 'signed-out' });
       });
     }
-    // TOKEN_REFRESHED and the rest change nothing.
   };
+  handler.invalidate = () => {
+    epoch += 1;
+    running = false;
+  };
+  return handler;
 }
 
 // Local scope only: the default would sign out every device.
-export async function signOutSequence({ client, engine, setStatus }) {
+export async function signOutSequence({ client, engine, setStatus, auth }) {
+  auth?.invalidate();
   await engine.stop();
   await client.auth.signOut({ scope: 'local' });
   setStatus({ status: 'signed-out' });
@@ -148,21 +167,38 @@ export async function signOutSequence({ client, engine, setStatus }) {
 
 // Signs out, drops the old client and returns the new one. The binding is kept,
 // so a different project shows up as an account change.
-export async function changeConnection({ client, engine, setStatus, unsubscribe = () => {}, storage, config, build }) {
+export async function changeConnection({ client, engine, setStatus, auth, unsubscribe = () => {}, storage, config, build }) {
   const clean = validateCloudConfig(config);
-  await signOutSequence({ client, engine, setStatus });
+  await signOutSequence({ client, engine, setStatus, auth });
+  // The sign-out above emits SIGNED_OUT; its deferred step must not reach the new connection.
+  auth?.invalidate();
   unsubscribe();
   await client.removeAllChannels?.();
   saveCloudConfig(storage, clean);
   return build(clean);
 }
 
+export const MAX_BACKUPS = 5;
+
+// Puts a new copy first and drops the oldest past MAX_BACKUPS.
+export function addBackup(list, payload, now, id) {
+  const kept = Array.isArray(list) ? list : [];
+  return [{ id, savedAt: now.toISOString(), payload }, ...kept].slice(0, MAX_BACKUPS);
+}
+
 // Erase flow after the user confirmed twice. A signed-in bound device erases the
-// account copy through the engine; otherwise the plain erase runs. Either way
-// the stored backup and the photos go (SYS-05). An error leaves everything as is.
-export async function eraseAll({ state, engine, everywhere, plainErase, deleteBackup, clearPhotos }) {
+// account copy through the engine; otherwise the plain erase runs. An error in the
+// erase itself leaves everything as is. Once it has succeeded, the stored backups
+// and the photos go too (SYS-05); a failure there is reported through onCleanupError
+// and does not make the erase a failure.
+export async function eraseAll({ state, engine, everywhere, plainErase, deleteBackup, clearPhotos, onCleanupError = () => {} }) {
   if (everywhere) await engine.eraseEverywhere(state);
   else plainErase();
-  await deleteBackup();
-  await clearPhotos();
+  for (const cleanup of [deleteBackup, clearPhotos]) {
+    try {
+      await cleanup();
+    } catch (error) {
+      onCleanupError(error);
+    }
+  }
 }

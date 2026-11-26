@@ -190,8 +190,11 @@ export function createCloudSync({
     if (gate && gate.uid === user.uid) return null;
     const localHasData = hasPlanData(getState());
     if (bound) {
-      gate = { type: 'account-changed', uid: user.uid, email: user.email };
-      emit('account-changed', { email: user.email, serverHasData: null, localHasData });
+      // The read tells the prompt whether the new account has a plan to replace with or is empty.
+      const row = await readRow('payload, rev', user.uid);
+      const serverHasData = Boolean(row) && !isMarker(row.payload);
+      gate = { type: 'account-changed', uid: user.uid, email: user.email, serverHasData };
+      emit('account-changed', { email: user.email, serverHasData, localHasData });
       return null;
     }
     const row = await readRow('payload, rev', user.uid);
@@ -293,6 +296,25 @@ export function createCloudSync({
     if (!current || (current.type !== 'link-needed' && current.type !== 'account-changed')) return;
     if (choice === 'cancel') {
       gate = { type: 'cancelled', uid: current.uid };
+      return;
+    }
+    if (choice === 'upload') {
+      if (current.type !== 'account-changed' || current.serverHasData !== false) {
+        throw new Error('Uploading is offered only for an account with no plan.');
+      }
+      // Read again right before binding: another device may have uploaded since the prompt.
+      const latest = await readRow('payload, rev', current.uid);
+      if (latest && !isMarker(latest.payload)) {
+        gate = { ...current, serverHasData: true };
+        emit('account-changed', { email: current.email, serverHasData: true, localHasData: hasPlanData(getState()) });
+        return;
+      }
+      rebind(current.uid);
+      if (latest) store.set(KEY.eraseSeen, latest.payload.erasedAt);
+      store.set(KEY.dirty, true);
+      store.set(KEY.changeGen, generation() + 1);
+      gate = null;
+      await syncNow();
       return;
     }
     if (choice !== 'replace') throw new Error('Unknown choice.');
