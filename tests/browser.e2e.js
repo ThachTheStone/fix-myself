@@ -707,3 +707,49 @@ test('child tasks nest in the Tasks view, show their ancestors and keep a parent
   await page.getByText('Complete or cancel its child tasks first.').waitFor();
   await detail.getByText('0 of 1 child tasks done').waitFor();
 });
+
+test('Account sync takes a connection, shows the signed-out form and renders the link prompt without any network call', { timeout: 30_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  const outside = [];
+  await page.route('**/*', (route) => {
+    const { hostname } = new URL(route.request().url());
+    if (hostname === '127.0.0.1') return route.continue();
+    outside.push(route.request().url());
+    return route.abort();
+  });
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}/?cloudtest#settings`);
+  const panel = page.locator('#cloud');
+  await panel.getByRole('heading', { name: 'Account sync' }).waitFor();
+  await panel.getByText('Set up a Supabase project first; see docs/SUPABASE.md').waitFor();
+
+  await panel.getByLabel('Project URL').fill('https://example.com');
+  await panel.getByLabel('Anon or publishable key').fill('sb_publishable_AbCdEfGhIjKlMnOp_1234');
+  await panel.getByRole('button', { name: 'Save connection' }).click();
+  await panel.getByText('Check the project URL and key from Supabase', { exact: false }).waitFor();
+  assert.equal(await panel.getByRole('button', { name: 'Send code' }).isVisible(), false);
+
+  await panel.getByLabel('Project URL').fill('https://abcdefghijklmnopqrst.supabase.co');
+  await panel.getByLabel('Anon or publishable key').fill('sb_secret_AbCdEfGhIjKlMnOp_1234');
+  await panel.getByRole('button', { name: 'Save connection' }).click();
+  await panel.getByText('Use the publishable or anon key, never the secret key.').waitFor();
+
+  await panel.getByLabel('Anon or publishable key').fill('sb_publishable_AbCdEfGhIjKlMnOp_1234');
+  await panel.getByRole('button', { name: 'Save connection' }).click();
+  await panel.getByRole('button', { name: 'Send code' }).waitFor();
+  await panel.getByLabel('Code', { exact: true }).waitFor();
+  await panel.getByRole('button', { name: 'Change connection' }).waitFor();
+
+  await page.evaluate(() => window.__cloudTest.status({ status: 'link-needed', email: 'someone@example.test', serverHasData: true, localHasData: true }));
+  const prompt = panel.getByRole('alert');
+  await prompt.getByText("This account already has a plan. Replace this device's plan with it?", { exact: false }).waitFor();
+  const replace = prompt.getByRole('button', { name: "Replace with the account's plan" });
+  assert.match(await replace.getAttribute('class'), /\bprimary\b/);
+  await prompt.getByRole('button', { name: 'Cancel' }).waitFor();
+
+  await page.evaluate(() => window.__cloudTest.status({ status: 'error', code: 'protected', message: 'x' }));
+  await panel.getByText('Turn off block rules and strict blocks on this device first', { exact: false }).waitFor();
+  assert.equal(await replace.isVisible(), true);
+  assert.deepEqual(outside, []);
+});

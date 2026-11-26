@@ -1463,6 +1463,10 @@ export function reminderText(state, reminder) {
 // Merges take the newer value, surface both values when two devices edited the
 // same field since they last synced, and never restore deleted tasks.
 
+// The state keys exportSync writes. A change to any of them is a change to the account copy.
+export const SYNCED_KEYS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges', 'appPresets',
+  'pendingBlockChanges', 'focusSegments', 'strictLog', 'stamps', 'supersedes', 'tasks', 'workouts', 'deleted', 'devices'];
+
 export function exportSync(state, device, now = new Date()) {
   return {
     format: SYNC_FORMAT,
