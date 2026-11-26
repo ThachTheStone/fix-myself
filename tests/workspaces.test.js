@@ -136,8 +136,55 @@ test('WS-02: bad arguments are rejected before anything runs', async () => {
   assert.throws(() => ws.list(5));
   assert.throws(() => ws.remove({}));
   assert.throws(() => ws.prune('t1'));
-  assert.throws(() => ws.prune(Array.from({ length: 501 }, (_, index) => `t${index}`)));
+  assert.throws(() => ws.prune(Array.from({ length: 5001 }, (_, index) => `t${index}`)));
   assert.throws(() => ws.prune([1]));
   assert.throws(() => ws.apps(null));
   assert.deepEqual(opened, []);
+});
+
+test('WS-02: prune refuses an empty list and accepts a large one', async () => {
+  const { ws } = setup({ picks: [pickFile('C:\\a.txt')] });
+  await ws.pick({ taskId: 't1', kind: 'file', linkCount: 0 });
+  ws.prune([]);
+  assert.equal(ws.list('t1').length, 1);
+  ws.prune(Array.from({ length: 5000 }, (_, index) => 'other' + index));
+  assert.equal(ws.list('t1').length, 0);
+  assert.throws(() => ws.prune(Array.from({ length: 5001 }, (_, index) => 't' + index)));
+});
+
+test('WS-02: more runnable extensions are refused, including trailing dots and spaces', async () => {
+  const names = ['a.pdf.exe', 'A.EXE', 'a.exe.', 'a.exe ', 'a.url', 'a.py', 'a.rdp', 'a.msc', 'a.settingcontent-ms'];
+  const { ws } = setup({ picks: names.map((name) => pickFile('C:\\x\\' + name)) });
+  for (const name of names) {
+    await assert.rejects(ws.pick({ taskId: 't1', kind: 'file', linkCount: 0 }), /Add apps from the app list instead\./, name);
+  }
+  assert.equal(ws.list('t1').length, 0);
+});
+
+test('WS-02: an app path longer than 260 characters is refused', async () => {
+  const long = 'C:\\' + 'a'.repeat(300) + '.exe';
+  const { ws } = setup({ apps: [{ path: long, name: 'Long' }] });
+  await assert.rejects(ws.addApp({ taskId: 't1', path: long, linkCount: 0 }), /Choose an app from the list\./);
+});
+
+test('WS-02: opening re-checks items from a crafted registry', async () => {
+  const registryText = JSON.stringify({
+    f1: { taskId: 't1', kind: 'file', path: 'C:\\x\\evil.exe.', label: 'evil' },
+    f2: { taskId: 't1', kind: 'file', path: 'C:\\x\\ok.txt', label: 'ok' },
+    a1: { taskId: 't1', kind: 'app', path: 'C:\\x\\script.bat', label: 'bat' },
+    a2: { taskId: 't1', kind: 'app', path: 'C:\\' + 'a'.repeat(300) + '.exe', label: 'long' }
+  });
+  const { ws, opened, spawned, present } = setup({ registryText });
+  for (const path of ['C:\\x\\evil.exe.', 'C:\\x\\ok.txt', 'C:\\x\\script.bat']) present.add(path);
+  const results = await ws.open({ taskId: 't1', urls: [] });
+  assert.deepEqual(results.map((item) => [item.label, item.ok]), [['evil', false], ['ok', true], ['bat', false], ['long', false]]);
+  assert.deepEqual(opened, ['C:\\x\\ok.txt']);
+  assert.equal(spawned.length, 0);
+});
+
+test('WS-02: linksOnly opens the websites and none of the local items', async () => {
+  const { ws, opened } = setup({ picks: [pickFile('C:\\a.txt')] });
+  await ws.pick({ taskId: 't1', kind: 'file', linkCount: 0 });
+  await ws.open({ taskId: 't1', urls: ['https://a.example/'], linksOnly: true });
+  assert.deepEqual(opened, ['https://a.example/']);
 });

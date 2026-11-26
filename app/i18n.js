@@ -1147,6 +1147,7 @@ export function t(key, params = {}) {
 }
 
 export function translateError(message) {
+  if (typeof message === 'string') message = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
   if (current === 'en' || !message) return message;
   if (message in ERRORS_VI) return ERRORS_VI[message];
   const tooLong = /^(.+) must be (\d+) characters or fewer\.$/.exec(message);

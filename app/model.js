@@ -252,7 +252,7 @@ const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domai
 export function linkBlock(state, url, now = new Date()) {
   let host;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
   } catch {
     return null;
   }
@@ -749,8 +749,8 @@ function copyPreset(preset) {
 function cleanWorkspaceApps(list) {
   if (!Array.isArray(list)) return [];
   return list.slice(0, MAX_WORKSPACE_APPS)
-    .filter((app) => app && typeof app.path === 'string' && app.path)
-    .map((app) => ({ path: app.path.slice(0, 260), name: String(app.name || app.path.split(/[\\/]/).pop()).slice(0, 80) }));
+    .filter((app) => app && typeof app.path === 'string' && app.path && app.path.length <= 260)
+    .map((app) => ({ path: app.path, name: String(app.name || app.path.split(/[\\/]/).pop()).slice(0, 80) }));
 }
 
 // `options.presetId` is undefined for sessions that should not touch the app
@@ -1210,6 +1210,20 @@ export function exportSync(state, device, now = new Date()) {
   };
 }
 
+function validSyncedLinks(links) {
+  if (!Array.isArray(links) || links.length > MAX_LINKS) return false;
+  return links.every((link) => {
+    if (!link || typeof link !== 'object' || typeof link.id !== 'string' || link.id.length < 1 || link.id.length > 64) return false;
+    if (typeof link.url !== 'string' || link.url.length > 2048 || typeof link.label !== 'string' || link.label.length > 80) return false;
+    try {
+      const { protocol } = new URL(link.url);
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  });
+}
+
 function validatePayload(payload) {
   if (payload?.format !== SYNC_FORMAT || payload.version !== 1 || typeof payload.deviceId !== 'string'
       || typeof payload.exportedAt !== 'string' || !Array.isArray(payload.data?.tasks)) {
@@ -1217,6 +1231,9 @@ function validatePayload(payload) {
   }
   for (const task of payload.data.tasks) {
     if (typeof task.id !== 'string' || typeof task.title !== 'string' || !STATUSES.includes(task.status)) {
+      throw new Error('The sync file contains an invalid task.');
+    }
+    if (task.links !== undefined && !validSyncedLinks(task.links)) {
       throw new Error('The sync file contains an invalid task.');
     }
   }

@@ -8,9 +8,14 @@ const MAX_ITEMS = 20;
 const MAX_URLS = 20;
 const MAX_URL_LENGTH = 2048;
 const MAX_ID = 64;
-const MAX_PRUNE = 500;
+const MAX_PRUNE = 5000;
+const MAX_APP_PATH = 260;
 const KINDS = new Set(['file', 'folder', 'app']);
-const RUNNABLE = new Set(['.exe', '.bat', '.cmd', '.com', '.ps1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.msi', '.lnk', '.scr', '.hta']);
+const RUNNABLE = new Set(['.exe', '.bat', '.cmd', '.com', '.ps1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.msi', '.lnk', '.scr', '.hta', '.url', '.appref-ms', '.cpl', '.msc', '.reg', '.pif', '.application', '.gadget', '.jar', '.py', '.pyw', '.wsh', '.wsc', '.psc1', '.msp', '.inf', '.scf', '.rdp', '.chm', '.diagcab', '.settingcontent-ms', '.xbap']);
+
+// Trailing dots and spaces are ignored by Windows, so "a.exe." is still a program.
+const isRunnable = (path) => RUNNABLE.has(extname(String(path).replace(/[. ]+$/, '')).toLowerCase());
+const isAppPath = (path) => typeof path === 'string' && path.length <= MAX_APP_PATH && /\.exe$/i.test(path);
 
 const validId = (value) => typeof value === 'string' && value.length > 0 && value.length <= MAX_ID;
 
@@ -81,13 +86,14 @@ function createWorkspaces(deps) {
       });
       if (result.canceled || !result.filePaths?.[0]) return null;
       const path = result.filePaths[0];
-      if (kind === 'file' && RUNNABLE.has(extname(path).toLowerCase())) throw new Error('Add apps from the app list instead.');
+      if (kind === 'file' && isRunnable(path)) throw new Error('Add apps from the app list instead.');
       return create(taskId, kind, path, basename(path) || path, linkCount);
     },
 
     async addApp({ taskId, path, linkCount } = {}) {
       if (!validId(taskId) || typeof path !== 'string' || path.length > 1024) throw new Error('Invalid workspace request.');
       validLinkCount(linkCount);
+      if (path.length > MAX_APP_PATH) throw new Error('Choose an app from the list.');
       const match = (await deps.listOpenApps()).find((entry) => entry.path.toLowerCase() === path.toLowerCase());
       if (!match) throw new Error('Choose an app from the list.');
       return create(taskId, 'app', match.path, match.name, linkCount);
@@ -110,6 +116,8 @@ function createWorkspaces(deps) {
       if (!Array.isArray(taskIds) || taskIds.length > MAX_PRUNE || !taskIds.every(validId)) {
         throw new Error('Invalid workspace request.');
       }
+      // An empty list would wipe the registry, so it never counts as "no tasks remain".
+      if (taskIds.length === 0) return;
       const keep = new Set(taskIds);
       let changed = false;
       for (const [id, item] of Object.entries(registry)) {
@@ -120,17 +128,20 @@ function createWorkspaces(deps) {
       if (changed) persist();
     },
 
-    async open({ taskId, urls } = {}) {
+    async open({ taskId, urls, linksOnly } = {}) {
       if (!validId(taskId)) throw new Error('Invalid workspace request.');
       const clean = validUrls(urls);
       const results = [];
       for (const url of clean) {
         results.push({ label: url, ok: await Promise.resolve(deps.shell.openExternal(url)).then(() => true, () => false) });
       }
-      for (const [, item] of itemsOf(taskId)) {
+      for (const [, item] of linksOnly === true ? [] : itemsOf(taskId)) {
         let ok = false;
         try {
-          if (item.kind === 'app') {
+          // The registry is re-checked at open time, in case its file was edited.
+          if (item.kind === 'app' ? !isAppPath(item.path) : item.kind === 'file' && isRunnable(item.path)) {
+            ok = false;
+          } else if (item.kind === 'app') {
             if (deps.exists(item.path)) {
               const child = deps.spawn(item.path, [], { detached: true, stdio: 'ignore', cwd: dirname(item.path) });
               child.on?.('error', () => {});

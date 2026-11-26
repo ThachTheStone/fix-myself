@@ -197,6 +197,7 @@ const platformName = () => desktop ? 'windows' : nativeReminders ? 'android' : '
 // folders and apps live in the desktop app's own registry; this window only
 // names them by id, so it can never make the desktop open a path it chose.
 
+const taskLinks = (task) => (Array.isArray(task?.links) ? task.links : []);
 const workspaceItemsEnabled = () => Boolean(desktop?.platform === 'win32' && desktop.workspaceOpen);
 const localItems = new Map();
 const strictApps = new Map();
@@ -220,7 +221,7 @@ async function syncWorkspaces(force = false) {
     const idSignature = ids.join('|');
     if (idSignature !== workspaceTaskIds) {
       workspaceTaskIds = idSignature;
-      await desktop.workspacePrune(ids.slice(0, 500));
+      await desktop.workspacePrune(ids);
     }
     const strictIds = strictTaskIds();
     const signature = strictIds.join('|');
@@ -264,12 +265,12 @@ function showLines(feedback, lines) {
   feedback.replaceChildren(...lines.flatMap((line, index) => (index === 0 ? [line] : [' ', line])));
 }
 
-async function openWorkspace(taskId, feedback) {
+async function openWorkspace(taskId, feedback, only = null) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
   const urls = [];
   const blocked = [];
-  for (const link of task.links ?? []) {
+  for (const link of taskLinks(task).filter((item) => only === null || item.id === only)) {
     const block = linkBlock(state, link.url);
     if (block) blocked.push(blockedLine(link, block));
     else urls.push(link.url);
@@ -277,7 +278,7 @@ async function openWorkspace(taskId, feedback) {
   let results = [];
   try {
     if (workspaceItemsEnabled()) {
-      results = await desktop.workspaceOpen({ taskId, urls });
+      results = await desktop.workspaceOpen({ taskId, urls, ...(only === null ? {} : { linksOnly: true }) });
     } else {
       for (const url of urls) window.open(url, '_blank', 'noopener');
       results = urls.map((url) => ({ label: url, ok: true }));
@@ -302,7 +303,7 @@ function renderWorkspace(task, fresh) {
   const local = localItems.get(task.id);
   if (fresh || !local) refreshLocalItems(task.id).catch(reportError);
   element('workspace-local').hidden = !workspaceItemsEnabled();
-  const links = task.links ?? [];
+  const links = taskLinks(task);
   const items = local ?? [];
   if (cached('detail:workspace', [links, items, locale()])) return;
   element('workspace-empty').hidden = links.length + items.length > 0;
@@ -313,7 +314,14 @@ function renderWorkspace(task, fresh) {
     ...links.map((link) => h('li', { class: 'subtask' },
       h('span', {},
         h('span', { class: 'muted', text: t('workspace.kind.link') + ' ' }),
-        h('a', { href: link.url, target: '_blank', rel: 'noopener noreferrer', text: link.label })),
+        h('a', {
+          href: link.url, target: '_blank', rel: 'noopener noreferrer', text: link.label,
+          // The desktop window denies new windows, so it opens the site through the main process.
+          onclick: workspaceItemsEnabled() ? (event) => {
+            event.preventDefault();
+            openWorkspace(task.id, element('workspace-feedback'), link.id).catch(reportError);
+          } : null
+        })),
       remove(link.label, () => editTask({ links: links.filter((other) => other.id !== link.id) }, element('workspace-feedback'))))),
     ...items.map((item) => h('li', { class: 'subtask' },
       h('span', {},
@@ -333,15 +341,15 @@ function renderWorkspace(task, fresh) {
 
 function wireWorkspace() {
   const feedback = element('workspace-feedback');
-  const linkCount = () => (state.tasks.find((item) => item.id === currentTaskId)?.links ?? []).length;
+  const linkCount = () => taskLinks(state.tasks.find((item) => item.id === currentTaskId)).length;
   element('workspace-link-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const { url, label } = event.target.elements;
     const task = state.tasks.find((item) => item.id === currentTaskId);
     if (!task) return;
     const link = { url: url.value, label: label.value };
-    if (!editTask({ links: [...(task.links ?? []), link] }, feedback)) return;
-    const saved = state.tasks.find((item) => item.id === task.id).links.at(-1);
+    if (!editTask({ links: [...taskLinks(task), link] }, feedback)) return;
+    const saved = taskLinks(state.tasks.find((item) => item.id === task.id)).at(-1);
     url.value = '';
     label.value = '';
     // A blocked site is still kept; it is only left out when the workspace opens (WS-03).

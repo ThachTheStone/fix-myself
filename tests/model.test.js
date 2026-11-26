@@ -881,3 +881,30 @@ test('WS-04: a strict hold starts with the apps of the workspace', () => {
   assert.deepEqual(held.focus.workspaceApps, [{ path: 'C:\Apps\Notes.exe', name: 'Notes' }]);
   assert.deepEqual(tickStrict(state, ctx('2026-11-19T10:00:00Z')).focus.workspaceApps, []);
 });
+
+test('WS-01: synced links are validated before they merge', () => {
+  const { state } = workspaceTask([{ url: 'https://a.example', label: 'A' }]);
+  const payload = () => JSON.parse(JSON.stringify(exportSync(state, { id: 'pc', name: 'PC' }, at(WS_NOW))));
+  const withLinks = (links) => { const copy = payload(); copy.data.tasks[0].links = links; return copy; };
+  const good = { id: 'l1', url: 'https://b.example/x', label: 'B' };
+  assert.equal(mergeSync(fresh(), withLinks([good]), ctx(WS_NOW, 'phone')).state.tasks[0].links[0].url, good.url);
+  for (const links of [[{ ...good, url: 'javascript:alert(1)' }], 'x', [null], [{ ...good, id: '' }], [{ ...good, label: 'x'.repeat(81) }],
+    Array.from({ length: 21 }, (_, index) => ({ ...good, id: 'l' + index }))]) {
+    assert.throws(() => mergeSync(fresh(), withLinks(links), ctx(WS_NOW, 'phone')), /invalid task/);
+  }
+});
+
+test('WS-03: linkBlock ignores one trailing dot in the host', () => {
+  const now = at(WS_NOW);
+  const base = fresh();
+  const state = startFocus({ ...base, preferences: { ...base.preferences, domains: ['youtube.com'] } }, now);
+  assert.deepEqual(linkBlock(state, 'https://youtube.com./x', now), { source: 'focus' });
+});
+
+test('WS-04: workspace apps with a path over 260 characters are dropped', () => {
+  const now = at(WS_NOW);
+  const { state } = workspaceTask();
+  const long = 'C:\\' + 'a'.repeat(300) + '.exe';
+  const started = startFocus(state, now, { workspaceApps: [{ path: long, name: 'Long' }, { path: 'C:\\Apps\\Ok.exe', name: 'Ok' }] });
+  assert.deepEqual(started.focus.workspaceApps, [{ path: 'C:\\Apps\\Ok.exe', name: 'Ok' }]);
+});

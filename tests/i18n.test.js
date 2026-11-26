@@ -49,3 +49,12 @@ test('language comes from the saved choice, then the system language', () => {
   assert.equal(detectLanguage(storage(null), ['vi-VN', 'en']), 'vi');
   assert.equal(detectLanguage(storage('fr'), ['fr-FR']), 'en');
 });
+
+test('errors from the main process lose the Electron prefix before they are translated', () => {
+  const wrapped = "Error invoking remote method 'desktop:workspace-add-app': Error: Choose an app from the list.";
+  setLanguage('en');
+  assert.equal(translateError(wrapped), 'Choose an app from the list.');
+  setLanguage('vi');
+  assert.equal(translateError(wrapped), 'Hãy chọn ứng dụng từ danh sách.');
+  setLanguage('en');
+});
