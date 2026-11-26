@@ -934,7 +934,7 @@ test('WS-04: workspace apps with a path over 260 characters are dropped', () => 
 // ---------------------------------------------------------------------------
 // Task tree (TASK-03 to TASK-06)
 import {
-  addChildTask, ancestorsOf, childProgress, effectiveParents, parentChoices, childrenOf, deadlineAfterParent, subtreeFocusMinutes, subtreeIds,
+  addChildTask, ancestorsOf, childProgress, effectiveParents, nestedChildren, parentChoices, childrenOf, deadlineAfterParent, subtreeFocusMinutes, subtreeIds,
   MAX_CHILDREN
 } from '../app/model.js';
 
@@ -1236,4 +1236,66 @@ test('WB-01: an active child task makes a block eligible for strict', () => {
   assert.equal(saveTask(withChild, id, { workBlocks: [BLOCK] }, ctx(T0)).tasks[0].workBlocks[0].strict, true);
   const done = toggleTask(withChild, byTitle(withChild, 'Step').id, ctx(T0));
   assert.throws(() => saveTask(done, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+// A parent made strict only because it has one open child.
+function strictOnChild(blockOverride = {}) {
+  let state = captureTask(fresh(), { title: 'P' }, ctx(T0));
+  const parent = state.tasks[0].id;
+  state = addChildTask(state, parent, { title: 'K' }, ctx(T0));
+  state = saveTask(state, parent, { workBlocks: [{ ...BLOCK, ...blockOverride }] }, ctx(T0));
+  return { state, parent, kid: byTitle(state, 'K').id };
+}
+
+test('WB-01: a strict parent whose last child was completed can still be edited and completed', () => {
+  const { state, parent, kid } = strictOnChild();
+  const done = toggleTask(state, kid, ctx(T0));
+  const renamed = saveTask(done, parent, { title: 'P renamed' }, ctx(T0));
+  assert.equal(byTitle(renamed, 'P renamed').status, 'open');
+  assert.equal(toggleTask(done, parent, ctx(T0)).tasks[0].status, 'completed');
+  // Making a block strict on an ineligible task still throws.
+  const second = { id: 'blk2', start: '2026-11-19T12:00:00.000Z', end: '2026-11-19T12:30:00.000Z', strict: true };
+  assert.throws(() => saveTask(done, parent, { workBlocks: [BLOCK, second] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+test('WB-01: the same holds during a live hold and the hold logs on_time', () => {
+  const { state, parent, kid } = strictOnChild();
+  let held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const now = ctx('2026-11-19T10:05:00Z');
+  held = toggleTask(held, kid, now);
+  held = toggleTask(held, parent, ctx('2026-11-19T10:06:00Z'));
+  const ticked = tickStrict(held, ctx('2026-11-19T10:07:00Z'));
+  assert.deepEqual(ticked.strictLog.map((entry) => entry.outcome), ['on_time']);
+});
+
+test('WB-01: before the block starts, taking the only child away from a strict parent is refused', () => {
+  const { state, parent, kid } = strictOnChild();
+  const other = captureTask(state, { title: 'Elsewhere' }, ctx(T0));
+  const message = /strict block on its parent task needs it/;
+  assert.throws(() => saveTask(state, kid, { parentId: null }, ctx(T0)), message);
+  assert.throws(() => saveTask(other, kid, { parentId: byTitle(other, 'Elsewhere').id }, ctx(T0)), message);
+  assert.throws(() => saveTask(state, kid, { status: 'canceled' }, ctx(T0)), message);
+  assert.throws(() => deleteTask(state, kid, ctx(T0)), message);
+  assert.equal(toggleTask(state, kid, ctx(T0)).tasks.find((task) => task.id === kid).status, 'completed');
+  // A second open child keeps the parent eligible.
+  const two = addChildTask(state, parent, { title: 'K2' }, ctx(T0));
+  assert.equal(saveTask(two, kid, { parentId: null }, ctx(T0)).tasks.find((task) => task.id === kid).parentId, null);
+  // Subtasks also keep it eligible.
+  const withSubtask = saveTask(state, parent, { subtasks: [{ title: 'Step' }] }, ctx(T0));
+  assert.equal(deleteTask(withSubtask, kid, ctx(T0)).tasks.length, 1);
+});
+
+test('WB-01: removing the last subtask of a strict task with no children still throws', () => {
+  const { state, id } = strictTask();
+  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+test('TASK-03: an active child of a closed parent is not nested under it', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title));
+  const closedMid = { ...state, tasks: state.tasks.map((task) => (task.id === l2.id ? { ...task, status: 'completed', completedAt: TT } : task)) };
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L1')).map((task) => task.title), ['L2']);
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L2')), []);
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L3')), []);
+  assert.ok(l1 && l3);
 });

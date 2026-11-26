@@ -513,8 +513,11 @@ export function effectiveParents(state) {
       path.forEach((id) => finished.add(id));
     }
     if (!cycle) break;
-    const newest = cycle.sort((a, b) =>
-      (byId.get(b).stamps?.parentId ?? '').localeCompare(byId.get(a).stamps?.parentId ?? '') || a.localeCompare(b))[0];
+    const stampOfParent = (id) => byId.get(id).stamps?.parentId ?? '';
+    const newest = cycle.sort((a, b) => {
+      if (stampOfParent(a) !== stampOfParent(b)) return stampOfParent(a) > stampOfParent(b) ? -1 : 1;
+      return a < b ? -1 : 1;
+    })[0];
     map.set(newest, null);
   }
   effectiveCache.set(state, map);
@@ -539,6 +542,37 @@ export function ancestorsOf(state, id) {
     parent = parents.get(parent) ?? null;
   }
   return out;
+}
+
+// Children shown nested under a task. A closed task shows none: an active child of a closed
+// parent is listed at the top level of its own list instead.
+export function nestedChildren(state, task) {
+  return isActive(task) ? childrenOf(state, task.id) : [];
+}
+
+// A strict block needs subtasks, completion criteria or an active task in the subtree (WB-01).
+export function strictEligible(state, task) {
+  return task.subtasks.length > 0 || Boolean(task.criteria) || hasActiveDescendant(state, task.id);
+}
+
+// Taking task `id` out of its parent (move, cancel or delete) must not strip a strict block
+// above it of the child that made it eligible. `newParent` is where it goes, or null.
+function checkAncestorsNeedIt(state, id, newParent, nowMs) {
+  const inside = new Set(subtreeIds(state, id));
+  inside.add(id);
+  for (const ancestor of ancestorsOf(state, id)) {
+    if (!ancestor.workBlocks.some((block) => isOpenStrict(block, nowMs))) continue;
+    const kept = new Set([ancestor.id, ...subtreeIds(state, ancestor.id)]);
+    if (newParent && kept.has(newParent)) continue;
+    const stays = subtreeIds(state, ancestor.id).some((other) => {
+      if (inside.has(other)) return false;
+      const task = state.tasks.find((item) => item.id === other);
+      return task && isActive(task);
+    });
+    if (strictEligible(state, ancestor) && ancestor.subtasks.length === 0 && !ancestor.criteria && !stays) {
+      throw new Error('A strict block on its parent task needs it. Add subtasks or criteria to the parent first.');
+    }
+  }
 }
 
 const hasActiveDescendant = (state, id) => subtreeIds(state, id).some((item) => {
@@ -673,6 +707,10 @@ export function saveTask(state, id, changes, ctx) {
       throw new Error('Open child tasks cannot be removed during a strict block.');
     }
   }
+  if (existing && ((parentChanged && storedParent(before) !== null)
+      || (after.status === 'canceled' && before.status !== 'canceled'))) {
+    checkAncestorsNeedIt(state, before.id, parentChanged ? storedParent(after) : null, nowMs);
+  }
   let queued = null;
   if (ctx?.applyingPending !== true) {
     // Removing an open subtask would let the task be completed without doing it.
@@ -723,9 +761,14 @@ export function saveTask(state, id, changes, ctx) {
       if (weakened) after.workBlocks = blocks.sort((a, b) => a.start.localeCompare(b.start));
       if (weakened || pending.length !== current.length) queued = pending;
     }
-    if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))
-        && after.subtasks.length === 0 && !after.criteria && !(existing && hasActiveDescendant(state, before.id))) {
-      throw new Error('Add subtasks or completion criteria before making a block strict.');
+    // A save may not make a block strict on an ineligible task, nor take a task with an open
+    // strict block from eligible to ineligible. A task that already lost its last child may be edited.
+    if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))) {
+      const eligible = (task) => (existing ? strictEligible(state, task) : strictEligible({ ...state, tasks: [...state.tasks, task] }, task));
+      const becameStrict = after.workBlocks.some((block) => isOpenStrict(block, nowMs) && !earlier.get(block.id)?.strict);
+      if (!eligible(after) && (becameStrict || (existing && eligible(before)))) {
+        throw new Error('Add subtasks or completion criteria before making a block strict.');
+      }
     }
   }
 
@@ -804,6 +847,7 @@ export function deleteTask(state, id, ctx) {
     throw new Error('Open child tasks cannot be removed during a strict block.');
   }
   if (childrenOf(state, id).length > 0) throw new Error('Delete or move its child tasks first.');
+  checkAncestorsNeedIt(state, id, null, c.now.getTime());
   let next = {
     ...state,
     tasks: state.tasks.filter((task) => task.id !== id),

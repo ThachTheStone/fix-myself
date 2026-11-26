@@ -6,7 +6,7 @@ import {
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused, isSessionRunning, endFocus, pauseFocus, resumeFocus, settleFocus,
   taskFocusMinutes, focusTimeReview, addChildTask, ancestorsOf, childProgress, childrenOf, deadlineAfterParent,
-  parentChoices, subtreeFocusMinutes, effectiveParents,
+  parentChoices, subtreeFocusMinutes, effectiveParents, nestedChildren,
   appLimitSnapshot, appReview, recordAppEvent,
   markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
@@ -606,7 +606,7 @@ function taskRow(task, list, options = {}) {
 // A task with its child tasks nested beneath it. `seen` stops damaged data from looping.
 function taskTree(task, list, options, seen = new Set()) {
   seen.add(task.id);
-  const children = childrenOf(state, task.id).filter((child) => !seen.has(child.id));
+  const children = nestedChildren(state, task).filter((child) => !seen.has(child.id));
   const rowOptions = { ...options };
   if (children.length) {
     const collapsed = collapsedTasks.has(task.id);
