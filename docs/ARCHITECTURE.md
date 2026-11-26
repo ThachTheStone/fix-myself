@@ -133,7 +133,7 @@ State cục bộ chuyển từ `version: 2` sang `version: 3`, kèm hàm chuyể
 - Quy tắc chờ chỉ được kiểm tra trong model của bản này. Một file đồng bộ tự chế hoặc một bản app cũ mang dấu sửa mới hơn cho `workBlocks` có thể bỏ `strict` ngay khi gộp, vì gộp chỉ so dấu sửa.
 - `pendingBlockChanges` gộp kiểu bản ghi sau thắng, nên hai thiết bị cùng xếp chờ có thể mất một mục. Khi đó block giữ nguyên, tức là lỗi nghiêng về phía an toàn.
 - Khóa việc con chỉ có hiệu lực trong lúc giữ phiên. Trước khi block bắt đầu, người dùng có thể đặt tiêu chí hoàn thành rồi xóa các việc con chưa xong. Đến giờ block, họ chỉ cần bấm hoàn thành.
-- Với độ trễ `next-day`, đổi múi giờ kế hoạch có thể làm thời điểm áp dụng đến sớm hơn. Lỗi này có từ trước và ảnh hưởng cả quy tắc chặn (BLK-06).
+- Đã sửa ngày 2026-11-26: đổi múi giờ kế hoạch từng rút được độ trễ `next-day`. Giờ `updateSettings` đưa việc đổi múi giờ vào `pendingRuleChanges` (loại `timeZone`) khi có quy tắc chặn đang bật hoặc block strict chưa kết thúc. `effectiveRules` trả `zoneChanged` và `timeZone` để app và extension cùng đổi múi giờ đúng hạn, kể cả khi app đóng. Bridge kiểm tra tên múi giờ trước khi gửi cho Chrome. Một extension bản cũ không hiểu loại thay đổi này thì giữ múi giờ cũ cho đến khi app gửi bản kế hoạch mới.
 
 Phần desktop cần thêm:
 

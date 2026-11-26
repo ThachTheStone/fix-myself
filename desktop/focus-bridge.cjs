@@ -157,7 +157,23 @@ function validChange(change) {
   if (kind === 'delay' && CHANGE_DELAYS.includes(change.change.changeDelay)) {
     return { ...base, ruleId: null, change: { type: 'delay', changeDelay: change.change.changeDelay } };
   }
+  if (kind === 'timeZone') {
+    const zone = change.change.timeZone ?? null;
+    if (zone !== null && !validZone(zone)) return null;
+    return { ...base, ruleId: null, change: { type: 'timeZone', timeZone: zone } };
+  }
   return null;
+}
+
+// An IANA zone name the runtime accepts, such as Asia/Ho_Chi_Minh.
+function validZone(zone) {
+  if (typeof zone !== 'string' || !zone || zone.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // What the extension needs to enforce rules while the desktop app is closed

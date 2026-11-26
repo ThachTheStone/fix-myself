@@ -1,4 +1,6 @@
-import { activeRules, coversIntervals, effectiveRules, scheduleIntervals, startOfDay } from '../extension/block-schedule.js';
+import {
+  activeRules, coversIntervals, effectiveRules, effectiveTimeZone, scheduleIntervals, startOfDay
+} from '../extension/block-schedule.js';
 
 export const DEFAULT_DOMAINS = ['youtube.com', 'facebook.com', 'instagram.com'];
 export const STORAGE_KEY = 'fix-myself:v1';
@@ -642,7 +644,32 @@ export function updateSettings(state, changes, ctx) {
   if (typeof settings.notifyDevice !== 'string' || !settings.notifyDevice) {
     throw new Error('Choose a notification device.');
   }
-  return reconcileReminders(setRoot(state, 'settings', settings, c), c.now);
+  // The planning zone decides when scheduled rules, strict blocks and a
+  // "next day" delay take effect, so changing it waits like any weaker change
+  // while there is something to protect (BLK-06, WB-01).
+  let next = state;
+  const currentZone = state.settings?.timeZone ?? null;
+  const wantedZone = settings.timeZone ?? null;
+  const delay = delayValue(state.settings?.changeDelay ?? DEFAULT_CHANGE_DELAY) ?? DEFAULT_CHANGE_DELAY;
+  if (wantedZone !== currentZone && delay !== 0 && zoneProtects(state, c.now)) {
+    settings.timeZone = currentZone;
+    const pending = [
+      ...(state.pendingRuleChanges ?? []).filter((change) => change?.change?.type !== 'timeZone'),
+      {
+        id: newId(), ruleId: null, change: { type: 'timeZone', timeZone: wantedZone },
+        effectiveAt: delayMoment(state, c, delay), createdAt: c.at
+      }
+    ];
+    next = setRoot(next, 'pendingRuleChanges', pending, c);
+  }
+  return reconcileReminders(setRoot(next, 'settings', settings, c), c.now);
+}
+
+// True while an enabled block rule or an upcoming strict block depends on the zone.
+function zoneProtects(state, now) {
+  const nowMs = now.getTime();
+  return (state.blockRules ?? []).some((rule) => rule.enabled)
+    || state.tasks.some((task) => (task.workBlocks ?? []).some((block) => block.strict && Date.parse(block.end) > nowMs));
 }
 
 export function registerDevice(state, device, now = new Date()) {
@@ -1660,13 +1687,16 @@ export function applyPendingRuleChanges(state, now = new Date(), device = 'rule-
   const pending = state.pendingRuleChanges ?? [];
   if (pending.length === 0) return state;
   const result = effectiveRules(state.blockRules ?? [], pending, now);
-  if (result.changeDelay === undefined && result.pendingChanges.length === pending.length) return state;
+  if (result.changeDelay === undefined && !result.zoneChanged && result.pendingChanges.length === pending.length) return state;
   const c = { at: now.toISOString(), device, now };
   let next = state;
   if (!same(result.rules, state.blockRules ?? [])) next = setRoot(next, 'blockRules', result.rules, c);
   next = setRoot(next, 'pendingRuleChanges', result.pendingChanges, c);
   if (result.changeDelay !== undefined) {
     next = setRoot(next, 'settings', { ...next.settings, changeDelay: result.changeDelay }, c);
+  }
+  if (result.zoneChanged) {
+    next = reconcileReminders(setRoot(next, 'settings', { ...next.settings, timeZone: result.timeZone }, c), now);
   }
   return next;
 }
@@ -1685,8 +1715,8 @@ export function planSnapshot(state, now = new Date()) {
 
 // Rules that apply at `now`, for the Settings preview and for tests.
 export function activeBlockRules(state, now = new Date()) {
-  const { rules } = effectiveRules(state.blockRules ?? [], state.pendingRuleChanges ?? [], now);
-  return activeRules(rules, now, state.settings?.timeZone ?? null);
+  const result = effectiveRules(state.blockRules ?? [], state.pendingRuleChanges ?? [], now);
+  return activeRules(result.rules, now, effectiveTimeZone(state.settings?.timeZone, result));
 }
 
 // Delivery for commitments due within [startDay, endDay] in the planning time zone.

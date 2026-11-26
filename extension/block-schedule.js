@@ -145,12 +145,17 @@ export function activeRules(rules, now = new Date(), timeZone = null) {
 
 // Rules with the pending changes that are due applied on top, plus the changes
 // that are still waiting. A change is never applied before its moment, so the
-// old protection stays in force until the delay passes (BLK-06).
+// old protection stays in force until the delay passes (BLK-06). A planning
+// time zone change waits too, because schedules and "next day" depend on it;
+// `zoneChanged` tells callers to use `timeZone` (which may be null, meaning the
+// device zone) instead of the plan's current zone.
 export function effectiveRules(rules = [], pendingChanges = [], now = new Date()) {
   const time = (now instanceof Date ? now : new Date(now)).getTime();
   let list = Array.isArray(rules) ? [...rules] : [];
   const waiting = [];
   let changeDelay;
+  let timeZone = null;
+  let zoneChanged = false;
   for (const change of Array.isArray(pendingChanges) ? pendingChanges : []) {
     const at = new Date(change?.effectiveAt ?? NaN).getTime();
     if (!Number.isFinite(at) || at > time) {
@@ -164,7 +169,15 @@ export function effectiveRules(rules = [], pendingChanges = [], now = new Date()
       if (list.some((item) => item.id === rule.id)) list = list.map((item) => (item.id === rule.id ? rule : item));
     } else if (kind === 'delay') {
       changeDelay = change.change.changeDelay;
+    } else if (kind === 'timeZone') {
+      timeZone = change.change.timeZone ?? null;
+      zoneChanged = true;
     }
   }
-  return { rules: list, pendingChanges: waiting, changeDelay };
+  return { rules: list, pendingChanges: waiting, changeDelay, timeZone, zoneChanged };
+}
+
+// The planning zone with a due zone change applied.
+export function effectiveTimeZone(currentZone, result) {
+  return result.zoneChanged ? result.timeZone : (currentZone ?? null);
 }

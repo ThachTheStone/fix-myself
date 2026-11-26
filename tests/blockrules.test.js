@@ -307,6 +307,47 @@ test('a longer countdown applies at once and a shorter one waits (BLK-06)', () =
   assert.deepEqual(shorterPass.pendingRuleChanges, []);
 });
 
+test('changing the planning time zone waits while rules depend on it (BLK-06)', () => {
+  const start = '2026-05-04T10:30:00Z';
+  // With no rules and no strict blocks nothing depends on the zone, so it applies at once.
+  const bare = updateSettings(fresh(), { timeZone: 'Pacific/Auckland' }, ctx(start));
+  assert.equal(bare.settings.timeZone, 'Pacific/Auckland');
+  assert.deepEqual(bare.pendingRuleChanges, []);
+
+  let state = saveBlockRule(fresh(), null, draft(), ctx(start));
+  state = setChangeDelay(state, 'next-day', ctx(start));
+  // Before the fix, switching to a zone where midnight is near shortened the
+  // "next day" wait from 13.5 hours to 30 minutes.
+  const moved = updateSettings(state, { timeZone: 'Pacific/Auckland' }, ctx(start));
+  assert.equal(moved.settings.timeZone, 'UTC', 'the old zone stays in force');
+  const waiting = moved.pendingRuleChanges.find((change) => change.change.type === 'timeZone');
+  assert.equal(waiting.effectiveAt, '2026-05-05T00:00:00.000Z', 'it waits for the next day in the current zone');
+  const weakened = deleteBlockRule(moved, moved.blockRules[0].id, ctx('2026-05-04T10:31:00Z'));
+  assert.equal(weakened.pendingRuleChanges.find((change) => change.change.type === 'delete').effectiveAt,
+    '2026-05-05T00:00:00.000Z', 'a weaker change made meanwhile still uses the current zone');
+
+  // A second zone change replaces the first instead of stacking.
+  const again = updateSettings(moved, { timeZone: 'Asia/Tokyo' }, ctx('2026-05-04T10:40:00Z'));
+  assert.deepEqual(again.pendingRuleChanges.filter((change) => change.change.type === 'timeZone')
+    .map((change) => change.change.timeZone), ['Asia/Tokyo']);
+
+  assert.equal(applyPendingRuleChanges(moved, at('2026-05-04T23:59:00Z'), 'pc'), moved);
+  const applied = applyPendingRuleChanges(moved, at('2026-05-05T00:00:00Z'), 'pc');
+  assert.equal(applied.settings.timeZone, 'Pacific/Auckland');
+  assert.deepEqual(applied.pendingRuleChanges, []);
+
+  // The extension reads the same waiting change and switches zones on time by itself.
+  const due = effectiveRules(moved.blockRules, moved.pendingRuleChanges, at('2026-05-05T00:00:00Z'));
+  assert.equal(due.zoneChanged, true);
+  assert.equal(due.timeZone, 'Pacific/Auckland');
+  assert.equal(effectiveRules(moved.blockRules, moved.pendingRuleChanges, at('2026-05-04T12:00:00Z')).zoneChanged, false);
+
+  // With no delay, the zone applies at once.
+  const instant = updateSettings({ ...state, settings: { ...state.settings, changeDelay: 0 } },
+    { timeZone: 'Pacific/Auckland' }, ctx(start));
+  assert.equal(instant.settings.timeZone, 'Pacific/Auckland');
+});
+
 test('an applied delay change is stamped so an older copy cannot undo it (BLK-06, BLK-08)', () => {
   const start = '2026-05-04T08:00:00Z';
   let state = fresh();

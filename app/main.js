@@ -1074,6 +1074,8 @@ function renderRules() {
     const name = rule?.name ?? change.change.rule?.name ?? '';
     const label = change.change.type === 'delay'
       ? t('rules.pendingDelay', { delay: delayLabel(change.change.changeDelay) })
+      : change.change.type === 'timeZone'
+        ? t('rules.pendingTimeZone', { zone: change.change.timeZone ?? t('rules.deviceZone') })
       : change.change.type === 'delete'
         ? t('rules.pendingDelete', { name })
         : t('rules.pendingUpdate', { name });
@@ -2212,11 +2214,15 @@ function wireSettings() {
   planningForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const { timeZone, leadStart, leadDeadline, notifyDevice } = planningForm.elements;
-    attempt(() => updateSettings(state, {
+    const saved = attempt(() => updateSettings(state, {
       timeZone: timeZone.value || null,
       reminderLeads: { start: parseLeadTimes(leadStart.value), deadline: parseLeadTimes(leadDeadline.value) },
       notifyDevice: notifyDevice.value
     }, ctx()), element('planning-feedback'), t('settings.planningSaved'));
+    const waiting = (state.pendingRuleChanges ?? []).find((change) => change?.change?.type === 'timeZone');
+    if (saved && waiting && (state.settings.timeZone ?? null) !== (timeZone.value || null)) {
+      element('planning-feedback').textContent = t('settings.timeZoneWaiting', { time: formatTime(waiting.effectiveAt) });
+    }
     refreshNotifications().catch(reportError);
   });
   element('notify-allow').addEventListener('click', async () => {

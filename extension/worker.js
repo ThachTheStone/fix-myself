@@ -1,7 +1,14 @@
 // Chrome half of the block rules (BLK-03 to BLK-07). The extension keeps the
 // last rule set the desktop app published and evaluates the shared schedule
 // itself, so rules keep applying while the desktop app is closed or offline.
-import { activeRules, effectiveRules } from './block-schedule.js';
+import { activeRules, effectiveRules, effectiveTimeZone } from './block-schedule.js';
+
+// Rules and planning zone with due changes applied, so a waiting zone change
+// takes effect on time even while the desktop app is closed.
+function rulesNow(plan, now) {
+  const result = effectiveRules(plan.rules, plan.pendingChanges, now);
+  return { rules: result.rules, timeZone: effectiveTimeZone(plan.timeZone, result) };
+}
 
 const desktopOrigin = 'http://127.0.0.1:42631';
 const endpoint = desktopOrigin + '/v1/focus';
@@ -86,8 +93,8 @@ function coverageOf(plan, focus, passes, now) {
   if (focus?.endAt > now.getTime()) {
     for (const domain of focus.domains) add({ domain, mode: 'focus', ruleId: null });
   }
-  const { rules } = effectiveRules(plan.rules, plan.pendingChanges, now);
-  for (const { rule } of activeRules(rules, now, plan.timeZone)) {
+  const { rules, timeZone } = rulesNow(plan, now);
+  for (const { rule } of activeRules(rules, now, timeZone)) {
     for (const domain of rule.domains) {
       const passed = rule.strength === 'pause'
         && passes.some((pass) => pass.ruleId === rule.id && pass.host === domain);
@@ -280,8 +287,8 @@ async function grantPass(ruleId, host, reason) {
   const { plan: storedPlan, focus } = await chrome.storage.local.get(['plan', 'focus']);
   const plan = planOf(storedPlan) ?? emptyPlan();
   const now = new Date();
-  const { rules } = effectiveRules(plan.rules, plan.pendingChanges, now);
-  const entry = activeRules(rules, now, plan.timeZone).find((item) => item.rule.id === ruleId) ?? null;
+  const { rules, timeZone } = rulesNow(plan, now);
+  const entry = activeRules(rules, now, timeZone).find((item) => item.rule.id === ruleId) ?? null;
   if (!entry || entry.rule.strength !== 'pause') throw new Error('This rule no longer offers a pass.');
   if (!entry.rule.domains.includes(host)) throw new Error('The rule does not cover this site.');
   if (focus?.endAt > now.getTime() && focus.domains.includes(host)) {
@@ -325,8 +332,8 @@ async function describe(host) {
       countdownSeconds: null, passMinutes: null
     };
   }
-  const { rules } = effectiveRules(plan.rules, plan.pendingChanges, now);
-  const entry = activeRules(rules, now, plan.timeZone).find((item) => item.rule.id === target.ruleId) ?? null;
+  const { rules, timeZone } = rulesNow(plan, now);
+  const entry = activeRules(rules, now, timeZone).find((item) => item.rule.id === target.ruleId) ?? null;
   return {
     mode: target.mode, host, ruleId: target.ruleId, ruleName: entry?.rule.name ?? '',
     until: entry?.until ?? null, mission: plan.mission, nextAction: plan.nextAction,

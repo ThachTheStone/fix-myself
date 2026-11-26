@@ -62,6 +62,16 @@ test('rules and waiting changes reach Chrome, but broken ones are refused', asyn
   assert.equal(bridge.validPlan({ ...plan, pendingChanges: [{ id: 'c', change: { type: 'delete' } }] }), null);
   assert.equal(bridge.validPlan({ ...plan, rules: new Array(21).fill(RULE) }), null);
   assert.equal(bridge.validSnapshot({ focus: null, plan: 'nope' }), null);
+
+  // A waiting planning zone change reaches Chrome so it applies on time offline.
+  const zoneChange = (timeZone) => ({ ...plan, pendingChanges: [
+    { id: 'z', ruleId: null, effectiveAt: '2026-11-20T10:00:00.000Z', change: { type: 'timeZone', timeZone } }
+  ] });
+  assert.deepEqual(bridge.validPlan(zoneChange('Pacific/Auckland')).pendingChanges[0].change,
+    { type: 'timeZone', timeZone: 'Pacific/Auckland' });
+  assert.equal(bridge.validPlan(zoneChange(null)).pendingChanges[0].change.timeZone, null);
+  assert.equal(bridge.validPlan(zoneChange('Mars/Olympus')), null);
+  assert.equal(bridge.validPlan(zoneChange(42)), null);
 });
 
 test('a plan beyond the size cap is withheld instead of truncated', async (t) => {
