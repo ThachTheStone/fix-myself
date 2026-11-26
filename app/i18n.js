@@ -1102,6 +1102,10 @@ const vi = {
 // Validation messages raised by the model and the desktop bridge, keyed by
 // their English text so model.js stays language-neutral.
 const ERRORS_VI = {
+  'Erase after the focus session ends.': 'Hãy xóa sau khi phiên tập trung kết thúc.',
+  'Turn off block rules and strict blocks on this device first; the change delay applies.':
+    'Hãy tắt quy tắc chặn và khối nghiêm ngặt trên thiết bị này trước; thời gian chờ vẫn áp dụng.',
+  'Finish linking this device to the account first.': 'Hãy hoàn tất liên kết thiết bị này với tài khoản trước.',
   'A strict block on its parent task needs it. Add subtasks or criteria to the parent first.': 'Khối nghiêm ngặt của công việc cha cần công việc này. Hãy thêm việc con hoặc tiêu chí cho công việc cha trước.',
   'This parent task no longer exists.': 'Công việc cha này không còn nữa.',
   'A task cannot move under itself or its own child tasks.': 'Không thể chuyển công việc vào chính nó hoặc các công việc con của nó.',

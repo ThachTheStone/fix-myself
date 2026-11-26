@@ -95,12 +95,24 @@ create policy own_doc on sync_docs
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 ```
 
-Luồng đồng bộ của mỗi thiết bị:
+Luồng đồng bộ của mỗi thiết bị ([app/cloud-sync.js](../app/cloud-sync.js)). `mergeSync` vẫn là nơi duy nhất quyết định giá trị; engine chỉ quyết định khi nào đọc, gộp và ghi.
 
-1. Đăng nhập bằng Supabase Auth (email OTP hoặc Google). Mọi thiết bị dùng cùng một tài khoản (SYS-03).
-2. Đọc `payload` và `rev`, chạy `mergeSync(local, remote)` trên máy.
-3. Ghi lại bằng `update … where rev = <rev đã đọc>` và tăng `rev`. Nếu không dòng nào được cập nhật, nghĩa là thiết bị khác vừa ghi: đọc lại, gộp lại và thử lần nữa.
-4. Đăng ký Realtime trên dòng của mình để nhận thay đổi từ thiết bị khác. Thiết bị cũng đồng bộ khi khởi động, khi có mạng lại và sau mỗi thay đổi (có debounce).
+1. **Đăng nhập và gắn tài khoản.** Engine nhớ id tài khoản đã gắn (`cloud.account`) trong bộ nhớ riêng của thiết bị.
+   - Cùng tài khoản: đồng bộ bình thường.
+   - Chưa gắn, dòng server chưa có: gắn và đẩy kế hoạch của máy với `expected_rev: 0`.
+   - Chưa gắn, dòng server đã có: trạng thái `link-needed`, đồng bộ tạm dừng cho tới khi người dùng chọn. Mặc định là **thay thế** (`replace`): lưu bản sao lưu của máy (`saveBackup`; nếu lưu lỗi thì hủy, trạng thái `error` mã `backup`), xóa dữ liệu đồng bộ cục bộ bằng `clearSyncedData` rồi gộp bản server với `allowOwn` và `preferRemoteRoot` để bản server thắng mọi trường gốc. Dữ liệu riêng của thiết bị (phiên focus đang chạy, Chrome) giữ nguyên; task của phiên chỉ bị bỏ nếu bản server không có nó (`settleFocusTask`). Thay thế (và "xóa luôn ở đây") bị từ chối với lỗi `protected` khi `protectionsActive`: máy đang có quy tắc chặn bật, thay đổi đang chờ, block strict chưa kết thúc hoặc strict hold. Như vậy đồng bộ không bao giờ là đường gỡ bảo vệ nhanh hơn thời gian chờ (BLK-06, WB-04). Bản sao lưu được ghi lại nếu kế hoạch đổi trong lúc ghi, và từ lúc đọc state cuối tới lúc áp bản thay thế không có `await`. `cloud.bindingPending` cùng trường cục bộ `state.cloudAccount` (ghi cùng một lần với dữ liệu thay thế, không bao giờ xuất) giúp hoàn tất việc gắn tài khoản nếu app dừng giữa chừng; nếu dữ liệu chưa kịp lưu thì không gắn và không đẩy gì, và lỗi khi áp dụng trả mã `apply`. Khi máy không có gì đang được bảo vệ, thay thế có thể nhận ngay `changeDelay` và `timeZone` của tài khoản; không có gì đang hiệu lực bị yếu đi. Máy chưa có dữ liệu thì thay thế không cần hỏi. Dòng là dấu xóa (erase marker) được coi như tài khoản trống: gắn không hỏi và đẩy kế hoạch của máy.
+   - Đã gắn tài khoản khác: trạng thái `account-changed`; không đọc hay ghi gì cho tới khi người dùng chọn `replace` hoặc `cancel`. Gắn lại đặt lại `peers`, `lastSeenRev`, `dirty`, `eraseSeen`, `mergePushes`.
+2. **Mỗi lượt đồng bộ** (khởi động, sau thay đổi cục bộ với debounce 3 giây, có mạng lại, app hiện lại, mỗi 5 phút, và mọi sự kiện Realtime INSERT hoặc UPDATE của dòng mình). Mỗi lúc chỉ một lượt chạy; lời gọi thêm được gộp thành một lượt chạy lại.
+   1. Đọc nhẹ chỉ cột `rev`. Nếu `rev` bằng `lastSeenRev` và `dirty` là false thì dừng. `dirty` được lưu nên sửa lúc offline rồi khởi động lại vẫn được đẩy lên.
+   2. Đọc đầy đủ `payload` và `rev`.
+   3. Dấu xóa: `erasedAt` khác rỗng và khác `eraseSeen` thì báo `erased` và không đẩy gì cho tới khi người dùng chọn xóa máy này hoặc tải lại kế hoạch của máy. Mọi lần đẩy sau đó đều mang `erasedAt`, nên thiết bị offline lâu vẫn nhận được dấu xóa.
+   4. `schema` của payload lớn hơn `SYNC_SCHEMA` (hiện là 2): báo lỗi `update-app`, không đẩy.
+   5. Luôn gộp bằng `mergeSync` kể cả payload do chính máy này ghi (`allowOwn`), nên sau sự cố hay khi state bị thay từ ngoài, dữ liệu cũ không bao giờ đè dữ liệu mới. Payload không hợp lệ: lỗi `bad-remote`, không đẩy.
+   6. **Chỉ đẩy khi khác**: so `canonical(data)` (sắp theo `id` các danh sách gốc và `events` của task, sắp khóa đối tượng, bỏ `devices[*].lastSeenAt`, không đảo mảng trong trường như `subtasks`) và `erasedAt`. Bằng nhau thì ghi `lastSeenRev`, xóa `dirty`. Khác thì gọi `push_sync_doc(expected_rev, new_payload)`; kết quả `null` nghĩa là thiết bị khác ghi trước, đọc lại và gộp lại, tối đa 3 lần rồi lỗi `busy`. `dirty` chỉ được xóa khi không có sửa đổi nào xảy ra từ lúc lấy bản export (`cloud.changeGen`). Vòng bảo vệ: quá 3 lần đẩy chỉ-để-gộp liên tiếp thì lỗi `loop` và dừng đẩy cho tới thay đổi cục bộ kế tiếp.
+   7. Dòng bị xóa trong khi đã gắn: đẩy lại với `expected_rev: 0`.
+3. **Xóa ở mọi nơi** (`eraseEverywhere`): dừng engine, đẩy dấu xóa (payload rỗng kèm `erasedAt`) qua cùng cơ chế CAS, và chỉ khi thành công mới xóa dữ liệu đồng bộ cục bộ, ghi `eraseSeen` và `lastSeenRev`, rồi chạy lại engine; kế hoạch cũ không thể đẩy lại lên trên dấu xóa. Thất bại thì báo lỗi và không đổi gì ở máy. Bị từ chối khi phiên focus đang chạy hoặc `protectionsActive`, và khi máy chưa gắn với tài khoản đang đăng nhập (không bao giờ ghi đè bản của tài khoản khác). State xóa được tính lại sau các `await`.
+4. **Trạng thái** gửi cho giao diện: `signed-out`, `link-needed`, `account-changed`, `syncing`, `synced`, `offline`, `erased`, `clock-skew` (lệch hơn 2 phút so với `server_now()`, kiểm tra một lần mỗi lần khởi động) và `error` với mã `bad-remote`, `update-app`, `busy`, `loop`, `backup`, `protected`, `apply`, `server`, `paused` (lỗi 5xx kéo dài hơn 1 giờ khi có mạng).
+5. **Quy tắc quyết định giá trị của `mergeSync`** để mọi thiết bị đến cùng một dữ liệu: `completedAt` và `originalDeadline` lấy giá trị sớm nhất khác rỗng; workout trùng `updatedAt` lấy bản có JSON chuẩn tắc lớn hơn; xung đột cục bộ đã được thiết bị khác giải quyết (cả hai dấu nằm trong `supersedes`) bị bỏ.
 
 Cách này dùng lại nguyên định dạng `fix-myself-sync`, nên file đồng bộ vẫn dùng được để sao lưu và chuyển dữ liệu.
 
