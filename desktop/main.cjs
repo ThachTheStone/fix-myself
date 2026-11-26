@@ -241,7 +241,8 @@ if (!app.requestSingleInstanceLock()) {
         screen,
         userDataPath: app.getPath('userData'),
         preloadPath: join(__dirname, 'mini-preload.cjs'),
-        htmlPath: join(__dirname, 'mini-timer.html')
+        htmlPath: join(__dirname, 'mini-timer.html'),
+        onUserClose: () => toRenderer('desktop:mini-closed')
       });
     }
     registerHandlers();

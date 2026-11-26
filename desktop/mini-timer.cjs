@@ -33,7 +33,7 @@ function placeWindow(saved, workAreas, size = { width: WIDTH, height: HEIGHT }) 
   return { x: first.x + first.width - size.width - INSET, y: first.y + INSET };
 }
 
-function createMiniTimer({ BrowserWindow, screen, userDataPath, preloadPath, htmlPath }) {
+function createMiniTimer({ BrowserWindow, screen, userDataPath, preloadPath, htmlPath, onUserClose = () => {} }) {
   const positionFile = join(userDataPath, 'mini-timer.json');
   let win = null;
   let lastSave = 0;
@@ -86,6 +86,13 @@ function createMiniTimer({ BrowserWindow, screen, userDataPath, preloadPath, htm
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', (event) => event.preventDefault());
     win.on('moved', scheduleSave);
+    // Alt+F4 or the taskbar hides the window and tells the app, instead of leaving the
+    // preference on with no window. destroy() does not emit 'close', so quitting still works.
+    win.on('close', (event) => {
+      event.preventDefault();
+      win.hide();
+      onUserClose();
+    });
     win.on('closed', () => { win = null; });
     win.loadFile(htmlPath).catch(console.error);
   }

@@ -208,7 +208,8 @@ function publishMiniTimer() {
     ? {
       show: true,
       endAt: view.endAt,
-      label: view.taskTitle ?? t('mini.wandering'),
+      // Synced or imported titles may be longer than the window accepts.
+      label: (view.taskTitle || t('mini.wandering')).slice(0, 160),
       status: view.strict ? t('mini.strict') : view.paused ? t('mini.paused') : '',
       clickThrough: Boolean(mini.clickThrough)
     }
@@ -326,8 +327,9 @@ function renderTimer(now = Date.now()) {
   element('mini-timer-through-field').hidden = !showMini || !mini.enabled;
   element('mini-timer-toggle').checked = Boolean(mini.enabled);
   element('mini-timer-through').checked = Boolean(mini.clickThrough);
+  // The task title is part of it so a rename, or a task removed by sync, updates the floating timer.
   const signature = [running, blocking, state.focus?.endAt, state.focus?.blockUntil, state.focus?.taskId,
-    paused, Boolean(hold)].join('|');
+    paused, Boolean(hold), miniTimerView(state)?.taskTitle ?? ''].join('|');
   if (previousFocusStatus !== signature) {
     previousFocusStatus = signature;
     syncChrome();
@@ -1500,6 +1502,8 @@ function wireToday() {
   element('mini-timer-toggle').addEventListener('change', (event) => changeMiniTimer({ enabled: event.target.checked }));
   element('mini-timer-through').addEventListener('change', (event) => changeMiniTimer({ clickThrough: event.target.checked }));
   desktop?.onMiniTimerToggle?.(() => changeMiniTimer({ enabled: !state.preferences.miniTimer.enabled }));
+  // Closing the floating window itself (Alt+F4) turns the preference off, so the checkbox matches.
+  desktop?.onMiniTimerClosed?.(() => changeMiniTimer({ enabled: false }));
   document.querySelectorAll('[data-add-task]').forEach((button) => button.addEventListener('click', showTask));
   document.querySelectorAll('[data-close-dialog]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
