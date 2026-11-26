@@ -517,11 +517,47 @@ test('a replace interrupted before the binding is recorded finishes on the next 
   const { server, b } = await pair();
   b.session.user = USER2;
   server.rows.set('user-2', structuredClone(server.row('user-1')));
-  // Simulate a crash after the account copy was installed but before the binding was written.
+  // Simulate a crash after the account copy was saved (it carries cloudAccount) but before the binding was written.
   b.store.set('cloud.bindingPending', 'user-2');
+  b.state = { ...b.state, cloudAccount: 'user-2' };
   await b.engine.start();
   assert.equal(b.store.get('cloud.account'), 'user-2');
   assert.notEqual(b.last().status, 'account-changed');
+});
+
+test('M3: a replace whose apply never reached storage never binds or uploads the old plan', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  server.rows.get('user-2').payload.data.tasks = [];
+  // Crash during the apply: the pending key is set but the saved state is still account 1's plan.
+  b.store.set('cloud.bindingPending', 'user-2');
+  const pushes = server.rpcLog.filter((call) => call.name === 'push_sync_doc').length;
+  await b.engine.start();
+  assert.equal(b.store.get('cloud.account'), 'user-1', 'still bound to the old account');
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(server.rpcLog.filter((call) => call.name === 'push_sync_doc').length, pushes);
+  assert.equal(server.row('user-2').payload.data.tasks.length, 0, 'nothing from account 1 reached account 2');
+});
+
+test('an apply that throws during replace clears the pending binding and reports it', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, 'dev-a');
+  a.edit((state, ctx) => captureTask(state, { title: 'Remote' }, ctx));
+  await a.engine.start();
+  const b = makeDevice(server, 'dev-b');
+  b.edit((state, ctx) => captureTask(state, { title: 'Local' }, ctx));
+  const engine = createCloudSync({
+    client: b.client, store: { get: (key) => b.store.get(key) ?? null, set: (key, value) => { b.store.set(key, value); } },
+    getState: () => b.state, applyMerged: () => { throw new Error('quota exceeded'); }, device: { id: 'dev-b', name: b.name },
+    now: b.now, onStatus: (status) => b.statuses.push(status), timers: b.timers, events: null, saveBackup: async () => {}
+  });
+  await engine.start();
+  await engine.chooseLink('replace');
+  assert.deepEqual([b.last().status, b.last().code], ['error', 'apply']);
+  assert.equal(b.store.get('cloud.bindingPending') ?? null, null);
+  assert.equal(b.store.get('cloud.account') ?? null, null);
+  assert.deepEqual(titles(b), ['Local']);
 });
 
 test('erase here keeps a running session, and a plain erase during a session throws', async () => {

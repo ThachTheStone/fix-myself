@@ -170,11 +170,13 @@ export function createCloudSync({
       return null;
     }
     // A replace that stopped after installing the account copy but before
-    // recording the binding: finish the binding instead of merging the copy
-    // into the previously bound account.
+    // recording the binding: finish it only when the saved state itself carries
+    // the new account (`cloudAccount` is written with the data in one apply).
+    // If the apply never reached storage, the old plan is still local and must
+    // not be bound to, or uploaded into, the new account.
     const pending = getKey(KEY.bindingPending);
     if (pending) {
-      if (pending === user.uid) {
+      if (pending === user.uid && getState().cloudAccount === user.uid) {
         rebind(user.uid);
         store.set(KEY.dirty, true);
       }
@@ -268,7 +270,14 @@ export function createCloudSync({
       }
     }
     store.set(KEY.bindingPending, uid);
-    await applyMerged(settleFocusTask(next), { reason: 'replace', summary });
+    try {
+      // cloudAccount is device-local (never exported) and is saved together with the replaced plan.
+      await applyMerged({ ...settleFocusTask(next), cloudAccount: uid }, { reason: 'replace', summary });
+    } catch (error) {
+      store.set(KEY.bindingPending, null);
+      emit('error', { code: 'apply', message: error?.message ?? 'The account copy could not be saved on this device.' });
+      return false;
+    }
     rebind(uid);
     store.set(KEY.bindingPending, null);
     if (row) {
