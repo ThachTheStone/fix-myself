@@ -130,6 +130,7 @@ function blankTask(c) {
     plannedDate: null,
     deadline: null,
     originalDeadline: null,
+    // kept for sync with older versions; folded into the criteria checklist (SRS 0.9)
     commitment: null,
     remind: { start: true, deadline: true },
     source: null,
@@ -303,6 +304,7 @@ const MAX_WORKSPACE_APPS = 20;
 
 function validateChanges(task, changes) {
   const next = {};
+  let commitmentOutcome = '';
   for (const [field, value] of Object.entries(changes)) {
     switch (field) {
       case 'title': {
@@ -363,16 +365,9 @@ function validateChanges(task, changes) {
         }).sort((a, b) => a.start.localeCompare(b.start));
         break;
       case 'commitment':
-        if (value === null) {
-          next.commitment = null;
-        } else {
-          const outcome = cleanText(value.outcome, 240, 'The committed outcome');
-          if (!outcome) throw new Error('Describe the outcome you are committing to.');
-          next.commitment = {
-            outcome,
-            committedAt: isoOrNull(value.committedAt, 'Choose a valid commitment time.')
-          };
-        }
+        // Older callers: the outcome becomes a completion criterion below; the field itself stays null.
+        if (value !== null) commitmentOutcome = cleanText(value?.outcome, 240, 'A criterion');
+        next.commitment = null;
         break;
       case 'remind':
         next.remind = { start: Boolean(value?.start), deadline: Boolean(value?.deadline) };
@@ -415,12 +410,22 @@ function validateChanges(task, changes) {
         throw new Error(`Unknown task field: ${field}`);
     }
   }
-  if ('criteria' in changes) {
-    const list = next.subtasks ?? task.subtasks;
-    const added = criteriaItems(String(changes.criteria ?? ''), list, (next.status ?? task.status) === 'completed');
-    if (list.length + added.length > 50) throw new Error('Add up to 50 completion criteria.');
-    if (added.length > 0) next.subtasks = [...list, ...added];
-    next.criteria = '';
+  if ('criteria' in changes || commitmentOutcome) {
+    const done = (next.status ?? task.status) === 'completed';
+    const start = next.subtasks ?? task.subtasks;
+    let list = start;
+    if ('criteria' in changes) {
+      const added = criteriaItems(String(changes.criteria ?? ''), list, done);
+      if (list.length + added.length > 50) throw new Error('Add up to 50 completion criteria.');
+      list = [...list, ...added];
+      next.criteria = '';
+    }
+    if (commitmentOutcome) {
+      const added = criteriaItems(commitmentOutcome, list, done);
+      if (list.length + added.length > 50) throw new Error('Add up to 50 completion criteria.');
+      list = [...list, ...added];
+    }
+    if (list.length > start.length) next.subtasks = list;
   }
   return next;
 }
@@ -470,14 +475,26 @@ export function criteriaItems(text, existing = [], done = false) {
 // Moves old text criteria into the checklist as a real, stamped edit, so an older device's
 // later checklist edit conflicts or loses to it instead of silently dropping the items.
 export function foldTaskCriteria(task, c) {
-  if (!String(task.criteria ?? '').trim()) return task;
-  const subtasks = [...task.subtasks, ...criteriaItems(task.criteria, task.subtasks, task.status === 'completed')].slice(0, 50);
+  const hasText = Boolean(String(task.criteria ?? '').trim());
+  if (!hasText && task.commitment == null) return task;
+  const done = task.status === 'completed';
+  let subtasks = [...task.subtasks];
+  if (hasText) subtasks = [...subtasks, ...criteriaItems(task.criteria, subtasks, done)];
+  if (task.commitment != null) subtasks = [...subtasks, ...criteriaItems(task.commitment.outcome, subtasks, done)];
+  subtasks = subtasks.slice(0, 50);
   const stamp = stampOf(c);
-  const stamps = { ...task.stamps, subtasks: stamp, criteria: stamp };
+  const stamps = { ...task.stamps, subtasks: stamp };
   const supersedes = { ...task.supersedes };
   delete supersedes.subtasks;
-  delete supersedes.criteria;
-  return { ...task, subtasks, criteria: '', stamps, supersedes };
+  if (hasText) {
+    stamps.criteria = stamp;
+    delete supersedes.criteria;
+  }
+  if (task.commitment != null) {
+    stamps.commitment = stamp;
+    delete supersedes.commitment;
+  }
+  return { ...task, subtasks, criteria: '', commitment: null, stamps, supersedes };
 }
 
 export function foldAllCriteria(state, ctx) {
@@ -514,11 +531,6 @@ function timelineEvents(before, after, c) {
   }
   if (!same(before.review, after.review) && after.review) {
     events.push(event(c, 'reviewed', { result: after.review.result }));
-  }
-  if (!same(before.commitment, after.commitment)) {
-    if (after.commitment) {
-      events.push(event(c, 'committed', { outcome: after.commitment.outcome, committedAt: after.commitment.committedAt }));
-    } else events.push(event(c, 'commitment_removed'));
   }
   const previous = new Map(before.workBlocks.map((block) => [block.id, block]));
   for (const block of after.workBlocks) {
@@ -1061,7 +1073,7 @@ export function inboxTasks(state) {
   const parents = effectiveParents(state);
   const activeIds = new Set(state.tasks.filter(isActive).map((task) => task.id));
   return state.tasks.filter((task) => isActive(task) && !activeIds.has(parents.get(task.id)) && !task.pinned && !task.plannedDate
-    && !task.commitment && task.workBlocks.length === 0);
+    && !task.deadline && task.workBlocks.length === 0);
 }
 
 export function todayView(state, now = new Date()) {
@@ -1668,6 +1680,11 @@ function mergeFields(local, remote, fields, base, ref, conflicts) {
       continue;
     }
     if (base && localStamp > base && remoteStamp > base && stampDevice(localStamp) !== stampDevice(remoteStamp)) {
+      if (field === 'commitment') {
+        // Never a conflict: the end-of-merge fold turns a remote outcome into a criterion.
+        if (remote.commitment != null) takeRemote();
+        continue;
+      }
       conflicts.push({ id: `${ref}:${field}`, ref, field, local: local[field], remote: remote[field], localStamp, remoteStamp });
       continue;
     }
@@ -1796,6 +1813,17 @@ export function mergeSync(state, payload, ctx) {
   summary.repaired = next.tasks.filter((task) => storedParent(task) !== (effective.get(task.id) ?? null)).length;
   if (next.nextActionId && !next.tasks.some((task) => task.id === next.nextActionId && isActive(task))) {
     next.nextActionId = null;
+  }
+  // A criteria list conflict must carry what this merge is about to fold (old text criteria or a
+  // commitment outcome), or choosing the other device's list would drop it: the fold clears them.
+  const unfolded = new Map(next.tasks.filter((task) => task.commitment != null || (task.criteria ?? '').trim())
+    .map((task) => [task.id, task]));
+  if (unfolded.size) {
+    next.conflicts = next.conflicts.map((conflict) => {
+      const task = conflict.field === 'subtasks' && unfolded.get(conflict.ref);
+      if (!task || !Array.isArray(conflict.remote)) return conflict;
+      return { ...conflict, remote: foldTaskCriteria({ ...task, subtasks: conflict.remote }, c).subtasks };
+    });
   }
   next = reconcileReminders(foldAllCriteria(next, ctx), c.now);
   return { state: next, summary };
@@ -2129,11 +2157,10 @@ export function activeBlockRules(state, now = new Date()) {
   return activeRules(result.rules, now, effectiveTimeZone(state.settings?.timeZone, result));
 }
 
-// Delivery for commitments due within [startDay, endDay] in the planning time zone.
+// Delivery for tasks with a deadline within [startDay, endDay] in the planning time zone.
 export function deliveryReview(state, startDay, endDay) {
   const timeZone = state.settings?.timeZone;
-  const committed = state.tasks.filter((task) => task.commitment && task.status !== 'canceled');
-  const dueInRange = committed.filter((task) => {
+  const dueInRange = state.tasks.filter((task) => task.status !== 'canceled').filter((task) => {
     if (!task.deadline) return false;
     const day = localDate(new Date(task.deadline), timeZone);
     return day >= startDay && day <= endDay;
@@ -2146,7 +2173,6 @@ export function deliveryReview(state, startDay, endDay) {
     onTime,
     carryovers: dueInRange.filter(isActive),
     rescheduled: dueInRange.filter((task) => task.originalDeadline && task.originalDeadline !== task.deadline),
-    undated: committed.filter((task) => !task.deadline),
     onTimeRate: dueInRange.length ? onTime.length / dueInRange.length : null,
     quality: Object.fromEntries(REVIEW_RESULTS.map((result) => [result, completed
       .filter((task) => (task.review?.result ?? 'unreviewed') === result).length]))

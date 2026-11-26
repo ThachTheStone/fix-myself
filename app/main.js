@@ -577,7 +577,6 @@ function taskMeta(task, isNext) {
     isNext ? t('meta.next') : '',
     task.pinned ? t('meta.priority') : '',
     task.status === 'in_progress' || task.status === 'canceled' ? statusLabel(task.status) : '',
-    task.commitment ? t('meta.committed') : '',
     task.plannedDate ? t('meta.planned', { day: formatDay(task.plannedDate) }) : '',
     upcomingBlock ? t('meta.block', { range: formatRange(upcomingBlock.start, upcomingBlock.end) }) : '',
     task.deadline ? t(isActive(task) && task.deadline < now ? 'meta.overdue' : 'meta.due', { time: formatTime(task.deadline) }) : '',
@@ -809,7 +808,7 @@ function renderDetail(fresh) {
   element('detail-body').hidden = !task;
   if (fresh) {
     for (const key of [...sectionCache.keys()]) if (key.startsWith('detail:')) sectionCache.delete(key);
-    for (const id of ['detail-feedback', 'commitment-feedback', 'criteria-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback', 'child-feedback']) {
+    for (const id of ['detail-feedback', 'criteria-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback', 'child-feedback']) {
       element(id).textContent = '';
     }
   }
@@ -819,7 +818,7 @@ function renderDetail(fresh) {
     return;
   }
   element('detail-title').textContent = task.title;
-  element('detail-status').textContent = [statusLabel(task.status), task.commitment ? t('meta.committed') : '', task.pinned ? t('meta.priority') : '']
+  element('detail-status').textContent = [statusLabel(task.status), task.pinned ? t('meta.priority') : '']
     .filter(Boolean).join(' · ');
   if (fresh) fillDetailForm(task);
   const original = element('detail-original-deadline');
@@ -832,20 +831,6 @@ function renderDetail(fresh) {
   if (element('detail-focus-time').textContent !== rolled) element('detail-focus-time').textContent = rolled;
   element('detail-after-parent').hidden = !deadlineAfterParent(state, task);
   renderTree(task, kids, fresh);
-
-  if (!cached('detail:commitment', task.commitment)) {
-    element('commitment-view').hidden = !task.commitment;
-    element('commitment-form').hidden = Boolean(task.commitment);
-    if (task.commitment) {
-      element('commitment-outcome').textContent = task.commitment.outcome;
-      element('commitment-time').textContent = task.commitment.committedAt
-        ? t('detail.committedTime', { time: formatTime(task.commitment.committedAt) }) : '';
-    } else {
-      const form = element('commitment-form').elements;
-      form.outcome.value = '';
-      form.committedAt.value = toLocalInput(new Date().toISOString());
-    }
-  }
 
   if (!cached('detail:criteria', task.subtasks)) {
     element('criteria-list').replaceChildren(...task.subtasks.map((item) => h('li', { class: 'subtask' },
@@ -964,7 +949,6 @@ function renderReview() {
     metaFor: (task) => t('review.originalRevised', { from: formatTime(task.originalDeadline), to: formatTime(task.deadline) })
   });
   renderTasks('missed-list', review.carryovers);
-  renderTasks('undated-list', review.undated);
   const focusReview = focusTimeReview(state, reviewStart, end);
   element('focus-review-empty').hidden = focusReview.totalMinutes > 0;
   element('focus-review-list').replaceChildren(...(focusReview.totalMinutes > 0 ? [
@@ -1583,7 +1567,7 @@ function renderAppReview(end) {
 // Settings
 
 function conflictFieldLabel(field) {
-  return field === 'subtasks' || field === 'criteria' ? t('detail.criteria') : field;
+  return field === 'subtasks' || field === 'criteria' || field === 'commitment' ? t('detail.criteria') : field;
 }
 
 function formatValue(field, value) {
@@ -2209,12 +2193,6 @@ function wireDetail() {
       if (attempt(() => deleteTask(state, currentTaskId, ctx()), element('detail-feedback'))) location.hash = '#tasks';
     });
   });
-  element('commitment-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const { outcome, committedAt } = event.target.elements;
-    editTask({ commitment: { outcome: outcome.value, committedAt: fromLocalInput(committedAt.value) } }, element('commitment-feedback'));
-  });
-  element('remove-commitment').addEventListener('click', () => editTask({ commitment: null }, element('commitment-feedback')));
   element('criteria-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const input = event.target.elements.title;
