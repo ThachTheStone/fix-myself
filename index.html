@@ -15,6 +15,7 @@
     <nav aria-label="Main navigation" data-i18n-aria-label="nav.label">
       <a href="#today" class="nav-link" data-i18n="nav.today">Today</a>
       <a href="#tasks" class="nav-link" data-i18n="nav.tasks">Tasks</a>
+      <a href="#calendar" class="nav-link" data-i18n="calendar.nav">Calendar</a>
       <a href="#review" class="nav-link" data-i18n="nav.review">Review</a>
       <a href="#settings" class="nav-link" data-i18n="nav.settings">Settings</a>
     </nav>
@@ -233,6 +234,22 @@
           </section>
         </div>
       </div>
+    </section>
+
+    <section id="calendar" class="view" aria-labelledby="calendar-title" hidden>
+      <div class="page-title section-heading">
+        <div><p class="eyebrow" id="calendar-range"></p><h1 id="calendar-title" data-i18n="calendar.title">Calendar</h1></div>
+        <div class="button-group">
+          <button type="button" class="button secondary" id="calendar-prev" aria-label="Previous" data-i18n-aria-label="calendar.prev">←</button>
+          <button type="button" class="button secondary" id="calendar-today" data-i18n="calendar.today">Today</button>
+          <button type="button" class="button secondary" id="calendar-next" aria-label="Next" data-i18n-aria-label="calendar.next">→</button>
+          <button type="button" class="button secondary" id="calendar-day" aria-pressed="false" data-i18n="calendar.day">Day</button>
+          <button type="button" class="button secondary" id="calendar-week" aria-pressed="true" data-i18n="calendar.week">Week</button>
+        </div>
+      </div>
+      <p id="calendar-help" class="muted" hidden data-i18n="calendar.readOnly">Edit blocks on your computer.</p>
+      <p id="calendar-feedback" class="feedback" role="status"></p>
+      <div id="calendar-scroll" class="cal-scroll"><div id="calendar-grid" class="cal-grid"></div></div>
     </section>
 
     <section id="review" class="view" aria-labelledby="review-title" hidden>
@@ -551,6 +568,22 @@
       <div class="dialog-actions">
         <button class="button secondary" type="button" data-close-dialog data-i18n="common.cancel">Cancel</button>
         <button class="button primary" type="submit" data-i18n="dialog.saveMission">Save mission</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="calendar-dialog" aria-labelledby="calendar-dialog-title">
+    <form id="calendar-form" method="dialog">
+      <h2 id="calendar-dialog-title" data-i18n="calendar.newBlock">New work block</h2>
+      <p id="calendar-no-tasks" hidden data-i18n="calendar.noTasks">Add a task first.</p>
+      <div id="calendar-fields">
+        <label for="calendar-task" data-i18n="calendar.task">Task</label>
+        <select id="calendar-task" name="task"></select>
+        <label class="check-label"><input type="checkbox" name="strict"> <span data-i18n="calendar.strict">Strict</span></label>
+        <p id="calendar-range-text" class="strong"></p>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" type="button" id="calendar-cancel" data-i18n="calendar.cancel">Cancel</button>
+        <button class="button primary" type="submit" id="calendar-create" data-i18n="calendar.create">Create</button>
       </div>
     </form>
   </dialog>

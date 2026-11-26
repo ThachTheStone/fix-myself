@@ -563,3 +563,64 @@ test('a strict work block holds the session, refuses completion with open subtas
   await page.getByText('You can exit in', { exact: false }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Exit strict block' }).isDisabled(), true);
 });
+
+test('the Calendar moves a block by dragging, keeps the deadline, and creates a block from an empty range (PLAN-01, PLAN-02)', { timeout: 60_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const url = `http://127.0.0.1:${app.httpServer.address().port}`;
+  const context = await launch(t);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.goto(url + '/#tasks');
+
+  await page.getByLabel('Quick capture').fill('Plan the report');
+  await page.getByRole('button', { name: 'Capture' }).click();
+  await page.locator('#inbox-list').getByRole('link', { name: 'Open Plan the report' }).click();
+  const detail = page.locator('#task');
+  const deadline = new Date(Date.now() + 3 * 86_400_000);
+  deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
+  await detail.getByLabel('Completion criteria').fill('Report sent');
+  await page.getByRole('button', { name: 'Save details' }).click();
+  await page.getByText('Saved.').waitFor();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  tomorrow.setHours(10, 0, 0, 0);
+  await detail.getByLabel('Start', { exact: true }).fill(localInput(tomorrow));
+  await detail.getByLabel('End', { exact: true }).fill(localInput(new Date(tomorrow.getTime() + 3_600_000)));
+  await page.getByRole('button', { name: 'Add work block' }).click();
+  await page.getByText('Work block added.').waitFor();
+
+  await page.getByRole('link', { name: 'Calendar' }).click();
+  const column = page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`);
+  if (await column.count() === 0) await page.getByRole('button', { name: 'Next' }).click();
+  await column.waitFor();
+  const block = page.locator('.cal-block', { hasText: 'Plan the report' });
+  await block.waitFor();
+  const box = await block.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + 12);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + 12 + 48, { steps: 5 });
+  await page.mouse.move(box.x + box.width / 2, box.y + 12 + 96, { steps: 5 });
+  await page.mouse.up();
+  await page.getByText('Block moved.').waitFor();
+
+  await page.locator('.cal-block', { hasText: 'Plan the report' }).click();
+  const shifted = new Date(tomorrow.getTime() + 2 * 3_600_000);
+  assert.equal(await page.getByLabel('Block 1 start').inputValue(), localInput(shifted));
+  assert.equal(await page.getByLabel('Block 1 end').inputValue(), localInput(new Date(shifted.getTime() + 3_600_000)));
+  assert.equal(await detail.getByLabel('Deadline', { exact: true }).inputValue(), localInput(deadline));
+
+  await page.getByRole('link', { name: 'Calendar' }).click();
+  const empty = await page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`).boundingBox();
+  const at = (hour) => empty.y + hour * 48;
+  await page.mouse.move(empty.x + empty.width / 2, at(15));
+  await page.mouse.down();
+  await page.mouse.move(empty.x + empty.width / 2, at(16.5), { steps: 8 });
+  await page.mouse.up();
+  const dialog = page.locator('#calendar-dialog');
+  await dialog.getByLabel('Task').selectOption({ label: 'Plan the report' });
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await page.getByText('Block added.').waitFor();
+  await page.locator('.cal-block', { hasText: 'Plan the report' }).nth(1).waitFor();
+  assert.equal(await page.locator('.cal-block').count(), 2);
+});
