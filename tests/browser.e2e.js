@@ -632,6 +632,8 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
 
   await page.getByRole('link', { name: 'Calendar' }).click();
   const column = page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`);
+  // Wait for the grid before deciding whether tomorrow is off screen (today can be the last day shown).
+  await page.locator('.cal-day').first().waitFor();
   if (await column.count() === 0) await page.getByRole('button', { name: 'Next' }).click();
   await column.waitFor();
   const block = page.locator('.cal-block', { hasText: 'Plan the report' });
@@ -645,13 +647,18 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
   await page.getByText('Block moved.').waitFor();
 
   await page.locator('.cal-block', { hasText: 'Plan the report' }).click();
+  // The task page renders on hashchange, after the click returns.
+  await page.locator('#detail-title', { hasText: 'Plan the report' }).waitFor();
   const shifted = new Date(tomorrow.getTime() + 2 * 3_600_000);
   assert.equal(await page.getByLabel('Block 1 start').inputValue(), localInput(shifted));
   assert.equal(await page.getByLabel('Block 1 end').inputValue(), localInput(new Date(shifted.getTime() + 3_600_000)));
   assert.equal(await detail.getByLabel('Deadline', { exact: true }).inputValue(), localInput(deadline));
 
   await page.getByRole('link', { name: 'Calendar' }).click();
-  const empty = await page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`).boundingBox();
+  await page.locator('.cal-day').first().waitFor();
+  if (await column.count() === 0) await page.getByRole('button', { name: 'Next' }).click();
+  await column.waitFor();
+  const empty = await column.boundingBox();
   const at = (hour) => empty.y + hour * 48;
   await page.mouse.move(empty.x + empty.width / 2, at(15));
   await page.mouse.down();
@@ -700,8 +707,10 @@ test('child tasks nest in the Tasks view, show their ancestors and keep a parent
   assert.equal(await list.locator('li.task').count(), 3);
 
   await list.getByRole('link', { name: 'Open Read variables' }).click();
+  await detail.locator('#detail-breadcrumb', { hasText: 'Query database' }).waitFor();
   assert.equal(await detail.locator('#detail-breadcrumb').textContent(), 'Payment module › Query database');
   await detail.locator('#detail-breadcrumb').getByRole('link', { name: 'Payment module' }).click();
+  await page.locator('#detail-title', { hasText: /^Payment module$/ }).waitFor();
   await detail.locator('#detail-input-status').selectOption('completed');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Complete or cancel its child tasks first.').waitFor();
