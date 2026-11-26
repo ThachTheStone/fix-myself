@@ -157,8 +157,6 @@
           <select id="detail-input-parent"><option value="" data-i18n="tree.top">Top level</option></select>
           <label for="detail-input-next" data-i18n="detail.nextStep">Next step</label>
           <input id="detail-input-next" name="nextStep" maxlength="200" placeholder="The very next physical action" data-i18n-placeholder="detail.nextStepPlaceholder">
-          <label for="detail-input-criteria" data-i18n="detail.criteria">Completion criteria</label>
-          <textarea id="detail-input-criteria" name="criteria" maxlength="1000" rows="3" placeholder="How will you know it is done?" data-i18n-placeholder="detail.criteriaPlaceholder"></textarea>
           <label class="check-label"><input name="pinned" type="checkbox"> <span data-i18n="detail.pin">Pin as a priority</span></label>
           <label class="check-label"><input name="supportsMission" type="checkbox"> <span data-i18n="detail.supportsMission">Supports my mission</span></label>
           <fieldset>
@@ -203,15 +201,16 @@
             <p id="child-feedback" class="feedback" role="status"></p>
           </section>
 
-          <section class="panel settings-panel" aria-labelledby="subtasks-label">
-            <h2 id="subtasks-label" data-i18n="detail.subtasks">Subtasks</h2>
-            <ul id="subtask-list" class="compact-list"></ul>
-            <form id="subtask-form" class="inline-fields">
-              <label for="subtask-title" class="visually-hidden" data-i18n="detail.newSubtask">New subtask</label>
-              <input id="subtask-title" name="title" maxlength="160" placeholder="Add a subtask" data-i18n-placeholder="detail.subtaskPlaceholder" required>
+          <section class="panel settings-panel" aria-labelledby="criteria-label">
+            <h2 id="criteria-label" data-i18n="detail.criteria">Completion criteria</h2>
+            <p class="muted" data-i18n="detail.criteriaHelp">Tick each one when it is true. The task counts as done when all are ticked.</p>
+            <ul id="criteria-list" class="compact-list"></ul>
+            <form id="criteria-form" class="inline-fields">
+              <label for="criteria-title" class="visually-hidden" data-i18n="detail.newCriterion">New criterion</label>
+              <input id="criteria-title" name="title" maxlength="160" placeholder="Add a criterion, e.g. Report sent to the client" data-i18n-placeholder="detail.criterionPlaceholder" required>
               <button class="button secondary" type="submit" data-i18n="common.add">Add</button>
             </form>
-            <p id="subtask-feedback" class="feedback" role="status"></p>
+            <p id="criteria-feedback" class="feedback" role="status"></p>
           </section>
 
           <section class="panel settings-panel" aria-labelledby="workspace-label">

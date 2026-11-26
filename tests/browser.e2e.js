@@ -74,8 +74,10 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   const now = new Date();
   const deadline = new Date(now.getTime() + 3 * 86_400_000);
   deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('New criterion').fill('Sent to the client');
+  await detail.getByRole('button', { name: 'Add', exact: true }).click();
+  await detail.locator('#criteria-list').getByText('Sent to the client').waitFor();
   await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
-  await detail.getByLabel('Completion criteria').fill('Sent to the client');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Saved.').waitFor();
 
@@ -527,7 +529,7 @@ test('a focus session works on a chosen task, pauses, ends with sites still bloc
   await page.getByText('Focus time:', { exact: false }).waitFor();
 });
 
-test('a strict work block holds the session, refuses completion with open subtasks, and offers an emergency exit (WB-01 to WB-04)', { timeout: 40_000 }, async (t) => {
+test('a strict work block holds the session, refuses completion with unticked criteria, and offers an emergency exit (WB-01 to WB-04)', { timeout: 40_000 }, async (t) => {
   const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
   t.after(() => app.httpServer.close());
   const page = await (await launch(t)).newPage();
@@ -539,9 +541,9 @@ test('a strict work block holds the session, refuses completion with open subtas
   await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
 
   const detail = page.locator('#task');
-  await detail.getByLabel('New subtask').fill('Draft the summary');
+  await detail.getByLabel('New criterion').fill('Draft the summary');
   await detail.getByRole('button', { name: 'Add', exact: true }).click();
-  await detail.getByText('Draft the summary').waitFor();
+  await detail.locator('#criteria-list').getByText('Draft the summary').waitFor();
 
   const now = new Date();
   await detail.getByLabel('Start', { exact: true }).fill(localInput(new Date(now.getTime() - 60_000)));
@@ -557,7 +559,7 @@ test('a strict work block holds the session, refuses completion with open subtas
   assert.equal(await page.getByRole('button', { name: 'End session' }).isVisible(), false);
 
   await page.getByRole('checkbox', { name: 'Complete Write the report' }).click();
-  await page.getByText('Tick every subtask before completing this task.').waitFor();
+  await page.getByText('Tick every completion criterion before completing this task.').waitFor();
 
   await page.getByRole('button', { name: 'Emergency exit' }).click();
   await page.getByText('You can exit in', { exact: false }).waitFor();
@@ -619,8 +621,10 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
   const detail = page.locator('#task');
   const deadline = new Date(Date.now() + 3 * 86_400_000);
   deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('New criterion').fill('Report sent');
+  await detail.getByRole('button', { name: 'Add', exact: true }).click();
+  await detail.locator('#criteria-list').getByText('Report sent').waitFor();
   await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
-  await detail.getByLabel('Completion criteria').fill('Report sent');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Saved.').waitFor();
   const tomorrow = new Date(Date.now() + 86_400_000);
