@@ -64,6 +64,12 @@ Starting focus from Today lets you pick a preset or **No app limit**, with your 
 
 During a session with a preset, Fix Myself watches which window is in front. When an app outside the preset comes to the front, it is minimized (never closed) and Fix Myself explains why, with the allowed apps, the end time and your next action. With **Pause**, you can continue after the countdown and get a pass for that app; with **Block**, there is no way through until the session ends. File Explorer, Settings, Task Manager, sign-in and security prompts, accessibility tools and Fix Myself itself are always allowed. Fix Myself must be running; if it cannot limit a window (for example an app running as administrator), Today says so. The Review page lists apps that were stopped, paused or let through, with the reasons you gave. Only the app name, path and time are recorded on this PC, never window titles.
 
+## Task workspace
+
+A task keeps the websites, files, folders and Windows apps you use to work on it. Open a task and use **Workspace**: add a website by its link (http or https, up to 20 items in total), and in the Windows app add a file or folder with the system picker or an app from the list of open windows. **Open workspace** opens everything at once, without closing anything that is already open. It also sits on Today beside "Working on" while a task session runs. Nothing opens by itself.
+
+Websites travel in sync files. Files, folders and apps stay on the computer that added them, and other devices do not list them. A site covered by the focus list or an active block rule is kept but not opened; the app names the list or rule and links to Settings. The apps of a task's workspace are allowed during that task's session on top of its app preset, and the app copies them when the session starts.
+
 ## Reminders and sync
 
 Each task can remind you before its work blocks and its deadline. Set lead times, the planning time zone and which device receives reminders in **Settings → Planning and reminders**. Due reminders also appear on Today, where you can snooze or dismiss them.

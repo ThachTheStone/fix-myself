@@ -18,5 +18,12 @@ contextBridge.exposeInMainWorld('fixMyselfDesktop', {
   setMiniTimer: (view) => ipcRenderer.invoke('desktop:mini-timer', view),
   onMiniTimerToggle: (callback) => ipcRenderer.on('desktop:mini-toggle', () => callback()),
   onMiniTimerClosed: (callback) => ipcRenderer.on('desktop:mini-closed', () => callback()),
+  workspacePick: (request) => ipcRenderer.invoke('desktop:workspace-pick', request),
+  workspaceAddApp: (request) => ipcRenderer.invoke('desktop:workspace-add-app', request),
+  workspaceList: (taskId) => ipcRenderer.invoke('desktop:workspace-list', taskId),
+  workspaceRemove: (id) => ipcRenderer.invoke('desktop:workspace-remove', id),
+  workspacePrune: (taskIds) => ipcRenderer.invoke('desktop:workspace-prune', taskIds),
+  workspaceOpen: (request) => ipcRenderer.invoke('desktop:workspace-open', request),
+  workspaceApps: (taskId) => ipcRenderer.invoke('desktop:workspace-apps', taskId),
   show: () => ipcRenderer.invoke('desktop:show')
 });

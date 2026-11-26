@@ -199,3 +199,9 @@ test('APP-09: app events are counted per day and hour in the planning time zone,
   assert.deepEqual(week.reasons, [{ day: '2026-11-23', hour: 23, name: 'Slack', reason: 'reply' }]);
   assert.equal(appReview(state, '2026-11-23', '2026-11-29', '2026-11-29').byApp[1].name, 'Game');
 });
+
+test('WS-04: a limit may hold a preset of 30 apps plus a workspace of 20', () => {
+  const apps = (count) => Array.from({ length: count }, (_, index) => ({ path: `C:\Apps\a${index}.exe`, name: `App ${index}` }));
+  assert.equal(validLimit(limitOf({ apps: apps(50) })).apps.length, 50);
+  assert.equal(validLimit(limitOf({ apps: apps(51) })), undefined);
+});

@@ -563,3 +563,43 @@ test('a strict work block holds the session, refuses completion with open subtas
   await page.getByText('You can exit in', { exact: false }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Exit strict block' }).isDisabled(), true);
 });
+
+test('a task keeps websites, reports one blocked by focus, and offers Open workspace on Today (WS-01, WS-03)', { timeout: 30_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const page = await (await launch(t)).newPage();
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}`);
+
+  await page.locator('#today').getByRole('button', { name: '+ Add task' }).click();
+  await page.getByRole('dialog').getByLabel('Task title').fill('Write the report');
+  await page.getByRole('dialog').getByLabel('Task title').press('Enter');
+  await page.locator('#today-list').getByText('Write the report').waitFor();
+  await page.getByLabel('Task for this session').selectOption({ label: 'Write the report' });
+  await page.getByRole('button', { name: 'Start focus' }).click();
+  await page.getByText('Working on: Write the report').waitFor();
+  await page.getByRole('button', { name: 'Open workspace' }).waitFor();
+  await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
+
+  const workspace = page.locator('#task');
+  await workspace.getByLabel('Website address').fill('https://docs.example.org/brief');
+  await workspace.getByLabel('Name (optional)').fill('Brief');
+  await workspace.getByRole('button', { name: 'Add website' }).click();
+  const link = workspace.locator('#workspace-list').getByRole('link', { name: 'Brief' });
+  await link.waitFor();
+  assert.equal(await link.getAttribute('target'), '_blank');
+  assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+
+  await workspace.getByLabel('Website address').fill('javascript:alert(1)');
+  await workspace.getByRole('button', { name: 'Add website' }).click();
+  await page.getByText('Add websites as http or https links.').waitFor();
+
+  await workspace.getByLabel('Website address').fill('https://www.youtube.com/watch?v=1');
+  await workspace.getByRole('button', { name: 'Add website' }).click();
+  await page.getByText('www.youtube.com is blocked by the focus list.').waitFor();
+  assert.equal(await workspace.locator('#workspace-feedback').getByRole('link', { name: 'Change it in Settings.' }).getAttribute('href'), '#settings');
+  await workspace.locator('#workspace-list li').filter({ hasText: 'www.youtube.com' }).waitFor();
+
+  await workspace.getByRole('button', { name: 'Remove www.youtube.com' }).click();
+  await workspace.getByRole('button', { name: 'Remove Brief' }).click();
+  await workspace.getByText('Nothing added yet.').waitFor();
+});
