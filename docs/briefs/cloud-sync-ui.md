@@ -98,8 +98,19 @@ part 2. Erasing while signed in uses the engine's erase marker.
 - **Configured and signed out.** Show:
   - an email field and a "Send code" button, which calls `signInWithOtp({ email, options: { shouldCreateUser: true }
     })`;
-  - a code field (`inputmode="numeric"`, 6 to 10 digits) and a "Sign in" button, which calls `verifyOtp({ email,
-    token, type: 'email' })`;
+  - a code field and a "Sign in" button. The field accepts either:
+    - a code of 6 to 10 digits, which calls `verifyOtp({ email, token, type: 'email' })`; or
+    - a pasted sign-in link from the default Supabase email. This is the fallback when the project cannot edit its
+      email templates without custom SMTP. Put the parser in `app/cloud.js` as `parseSignInInput(text)`:
+      - Accept only links whose host matches the configured project URL.
+      - Read the `token` query parameter (Supabase puts the hashed token there) and the `type` parameter.
+      - Call `verifyOtp({ token_hash, type })`, where `type` is `signup` for `signup` and `magiclink` for anything
+        else.
+      - Any other text gives "Enter the code from the email, or paste the sign-in link without opening it."
+
+    A help line under the field reads: "Paste the code, or right-click the link in the email and copy it. Do not open
+    the link." Test the parser with a code, a valid link, a link to another host, and garbage. This path must be
+    verified against the real project.
   - a "Change connection" link.
 - **Signed in.** Show "Signed in as {email}", the status line, a "Sync now" button and a "Sign out" button. "Sign out"
   runs the sign-out sequence and keeps local data and the binding.
