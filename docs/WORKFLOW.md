@@ -41,6 +41,13 @@ thu trên thiết bị thật, tắt app desktop đang chạy để thử Electr
 - CSP của app cấm thuộc tính `style=""`. Đặt vị trí bằng class hoặc `node.style`.
 - Sau khi sửa `app/main.js`, rà các tên dùng mà chưa import. Đã có lỗi lọt qua review vì việc này.
 - Mỗi lần ghi tài liệu, kiểm tra bảng Markdown không bị chèn đoạn văn ở giữa.
+- Không chạy `npm ci` hay `npm install` trong thư mục repo chính: app desktop của người dùng có thể đang chạy Electron
+  từ `node_modules` ở đó, npm không xóa được file đang khóa và để lại `node_modules` hỏng một nửa. Cài thư viện và chạy
+  test của một lần merge trong worktree riêng; thư mục chính chỉ cài lại khi người dùng đã tắt app.
+- Trong PowerShell, `[IO.File]` đọc đường dẫn tương đối theo thư mục của tiến trình, không theo `cd`. Dùng đường dẫn
+  tuyệt đối.
+- Test trình duyệt phải chờ trang vẽ xong sau khi bấm link: trang task và lịch vẽ lại khi có `hashchange`, sau khi lệnh
+  click đã trả về. Chờ `#detail-title` hoặc phần tử cần đọc, rồi mới đọc giá trị.
 
 ## Chạy và kiểm tra
 
