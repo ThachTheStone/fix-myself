@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, nativeImage, Tray } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, Tray } = require('electron');
 const { randomBytes } = require('node:crypto');
 const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
@@ -6,6 +6,7 @@ const { createFocusBridge, validSnapshot, MAX_PLAN_BYTES, PORT } = require('./fo
 const { listOpenApps } = require('./apps.cjs');
 const { createAppGuard } = require('./app-guard.cjs');
 const { startWatcher } = require('./app-watcher.cjs');
+const { createMiniTimer, validMiniView } = require('./mini-timer.cjs');
 
 const loginFlag = '--login-launch';
 const loginLaunch = process.platform === 'win32' && process.argv.includes(loginFlag);
@@ -23,6 +24,7 @@ let quitting = false;
 let keepRunning = process.platform === 'win32';
 const chromeReports = new Map();
 let appGuard = null;
+let miniTimer = null;
 
 // Fix Myself's own windows are always allowed (APP-04). Refreshed at most every five seconds.
 let ownPids = { at: 0, pids: new Set([process.pid]) };
@@ -88,6 +90,7 @@ function createTray() {
   tray.setToolTip('Fix Myself');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Today', click: showWindow },
+    { label: 'Floating timer', click: () => toRenderer('desktop:mini-toggle') },
     { type: 'separator' },
     { label: 'Quit Fix Myself', click: () => { quitting = true; app.quit(); } }
   ]));
@@ -170,6 +173,14 @@ function registerHandlers() {
       return appGuard.coverage();
     });
   }
+  if (process.platform === 'win32') {
+    ipcMain.handle('desktop:mini-timer', (event, view) => {
+      fromApp(event);
+      const clean = validMiniView(view);
+      if (!clean) throw new Error('Invalid floating timer.');
+      miniTimer.apply(clean);
+    });
+  }
   // The planner publishes the focus session and the rule set together. Chrome
   // keeps them, so rules outlive this window (BLK-07).
   ipcMain.handle('desktop:plan', (event, snapshot) => {
@@ -224,6 +235,16 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     await openBridge().catch((error) => console.error('Chrome pairing unavailable:', error.message));
     createGuard();
+    if (process.platform === 'win32') {
+      miniTimer = createMiniTimer({
+        BrowserWindow,
+        screen,
+        userDataPath: app.getPath('userData'),
+        preloadPath: join(__dirname, 'mini-preload.cjs'),
+        htmlPath: join(__dirname, 'mini-timer.html'),
+        onUserClose: () => toRenderer('desktop:mini-closed')
+      });
+    }
     registerHandlers();
     createWindow();
     createTray();
@@ -233,5 +254,6 @@ if (!app.requestSingleInstanceLock()) {
     quitting = true;
     bridge?.close();
     appGuard?.stop();
+    miniTimer?.destroy();
   });
 }

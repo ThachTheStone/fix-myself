@@ -92,7 +92,8 @@ function defaultState() {
     appActivity: { days: {}, reasons: [] },
     preferences: {
       focusAtLogin: false, focusMinutes: 45, domains: [...DEFAULT_DOMAINS], keepRunning: true,
-      autoAppPreset: null, lastAppPreset: null
+      autoAppPreset: null, lastAppPreset: null,
+      miniTimer: { enabled: false, clickThrough: false }
     }
   };
 }
@@ -892,6 +893,30 @@ export function setAutoAppPreset(state, id) {
   const value = id ?? null;
   if ((state.preferences.autoAppPreset ?? null) === value) return state;
   return { ...state, preferences: { ...state.preferences, autoAppPreset: value } };
+}
+
+// Device-local floating timer preference (FOC-12). Not synced, so no stamp.
+export function setMiniTimer(state, changes) {
+  const current = state.preferences.miniTimer ?? { enabled: false, clickThrough: false };
+  const next = {
+    enabled: changes.enabled === undefined ? Boolean(current.enabled) : Boolean(changes.enabled),
+    clickThrough: changes.clickThrough === undefined ? Boolean(current.clickThrough) : Boolean(changes.clickThrough)
+  };
+  if (current.enabled === next.enabled && current.clickThrough === next.clickThrough) return state;
+  return { ...state, preferences: { ...state.preferences, miniTimer: next } };
+}
+
+// What the floating timer shows (FOC-12). Null when no session is running.
+export function miniTimerView(state, now = new Date()) {
+  const focus = state.focus;
+  if (!isSessionRunning(focus, now.getTime())) return null;
+  const task = focus.taskId ? state.tasks.find((item) => item.id === focus.taskId) : null;
+  return {
+    endAt: focus.endAt,
+    taskTitle: task ? task.title : null,
+    paused: focus.segmentStart == null,
+    strict: Boolean(focus.strict)
+  };
 }
 
 // What the desktop guard needs to limit apps during the running session
