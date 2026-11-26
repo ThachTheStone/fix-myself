@@ -820,3 +820,113 @@ test('FOC-12: a v3 state saved without miniTimer loads with the defaults', () =>
   const loaded = readState(makeStorage(JSON.stringify(saved)));
   assert.deepEqual(loaded.preferences.miniTimer, { enabled: false, clickThrough: false });
 });
+
+// ---------------------------------------------------------------------------
+// Task workspaces (WS-01 to WS-04)
+import { linkBlock, saveAppPreset, saveBlockRule } from '../app/model.js';
+
+const WS_NOW = '2026-11-19T09:00:00Z';
+
+function workspaceTask(links) {
+  let state = captureTask(fresh(), { title: 'Write the report' }, ctx(WS_NOW));
+  const id = state.tasks[0].id;
+  if (links) state = saveTask(state, id, { links }, ctx(WS_NOW));
+  return { state, id };
+}
+
+test('WS-01: links are validated, trimmed and labelled by host', () => {
+  const { state, id } = workspaceTask([{ url: '  https://docs.example.com/a?b=1 ', label: '  ' }, { url: 'http://x.org', label: ' Home ' }]);
+  const links = state.tasks.find((task) => task.id === id).links;
+  assert.equal(links[0].url, 'https://docs.example.com/a?b=1');
+  assert.equal(links[0].label, 'docs.example.com');
+  assert.equal(links[1].label, 'Home');
+  assert.ok(links[0].id && links[0].id !== links[1].id);
+  for (const url of ['javascript:alert(1)', 'file:///C:/a.txt', 'not a url', '', `https://a.example/${'x'.repeat(2048)}`]) {
+    assert.throws(() => saveTask(state, id, { links: [{ url }] }, ctx(WS_NOW)), /Add websites as http or https links\./);
+  }
+  assert.throws(() => saveTask(state, id, { links: [{ url: 'https://a.example', label: 'x'.repeat(81) }] }, ctx(WS_NOW)), /80 characters/);
+  const many = Array.from({ length: 21 }, () => ({ url: 'https://a.example' }));
+  assert.throws(() => saveTask(state, id, { links: many }, ctx(WS_NOW)), /Add up to 20 items to a workspace\./);
+  assert.throws(() => saveTask(state, id, { links: 'https://a.example' }, ctx(WS_NOW)), /Add up to 20 items/);
+});
+
+test('WS-01: links sync as a task field and old tasks read as no links', () => {
+  const { state, id } = workspaceTask([{ url: 'https://a.example', label: 'A' }]);
+  assert.ok(state.tasks[0].stamps.links);
+  const payload = exportSync(state, { id: 'pc', name: 'PC' }, at(WS_NOW));
+  const merged = mergeSync(fresh(), payload, ctx(WS_NOW, 'phone'));
+  assert.equal(merged.state.tasks.find((task) => task.id === id).links[0].url, 'https://a.example');
+  const old = { ...state, tasks: state.tasks.map(({ links, ...rest }) => rest) };
+  assert.equal(old.tasks[0].links, undefined);
+  const edited = saveTask(old, id, { title: 'Renamed' }, ctx(WS_NOW));
+  assert.equal(edited.tasks[0].title, 'Renamed');
+});
+
+test('WS-03: linkBlock reports the focus list and active rules by host', () => {
+  const now = at(WS_NOW);
+  let state = fresh();
+  assert.equal(linkBlock(state, 'https://www.youtube.com/watch', now), null);
+  state = saveBlockRule(state, null, { name: 'Evening news', domains: 'news.example', schedule: { type: 'always' }, strength: 'block' }, ctx(WS_NOW));
+  assert.deepEqual(linkBlock(state, 'https://m.news.example/x', now), { source: 'rule', name: 'Evening news' });
+  assert.equal(linkBlock(state, 'https://notnews.example/', now), null);
+  state = { ...state, preferences: { ...state.preferences, domains: ['youtube.com'] } };
+  assert.equal(linkBlock(state, 'https://www.youtube.com/', now), null);
+  state = startFocus(state, now);
+  assert.deepEqual(linkBlock(state, 'https://www.youtube.com/', now), { source: 'focus' });
+  assert.deepEqual(linkBlock(state, 'https://youtube.com/', now), { source: 'focus' });
+  assert.equal(linkBlock(state, 'https://myyoutube.com/', now), null);
+  assert.equal(linkBlock(state, 'garbage', now), null);
+});
+
+test('WS-04: a session copies the workspace apps and merges them into the app limit', () => {
+  const now = at(WS_NOW);
+  const CODE = 'C:\Apps\Code.exe';
+  const NOTES = 'C:\Apps\Notes.exe';
+  let { state, id } = workspaceTask();
+  state = saveAppPreset(state, null, { name: 'Coding', apps: [{ path: CODE, name: 'VS Code' }], strength: 'block' }, ctx(WS_NOW));
+  const presetId = state.appPresets[0].id;
+  const apps = [{ path: NOTES, name: 'Notes' }, { path: CODE.toLowerCase(), name: 'code again' }];
+  const withPreset = startFocus(state, now, { taskId: id, presetId, workspaceApps: apps });
+  assert.deepEqual(withPreset.focus.workspaceApps, apps);
+  const snapshot = appLimitSnapshot(withPreset, now);
+  assert.deepEqual(snapshot.apps, [{ path: CODE, name: 'VS Code' }, { path: NOTES, name: 'Notes' }]);
+  const noPreset = startFocus(state, now, { taskId: id, workspaceApps: apps });
+  assert.equal(appLimitSnapshot(noPreset, now), null);
+  const capped = startFocus(state, now, { workspaceApps: Array.from({ length: 30 }, (_, index) => ({ path: `C:\a${index}.exe`, name: 'a' })) });
+  assert.equal(capped.focus.workspaceApps.length, 20);
+  assert.deepEqual(startFocus(state, now).focus.workspaceApps, []);
+});
+
+test('WS-04: a strict hold starts with the apps of the workspace', () => {
+  const { state, id } = strictTask();
+  const held = tickStrict(state, { ...ctx('2026-11-19T10:00:00Z'), workspaceApps: (taskId) => (taskId === id ? [{ path: 'C:\Apps\Notes.exe', name: 'Notes' }] : []) });
+  assert.deepEqual(held.focus.workspaceApps, [{ path: 'C:\Apps\Notes.exe', name: 'Notes' }]);
+  assert.deepEqual(tickStrict(state, ctx('2026-11-19T10:00:00Z')).focus.workspaceApps, []);
+});
+
+test('WS-01: synced links are validated before they merge', () => {
+  const { state } = workspaceTask([{ url: 'https://a.example', label: 'A' }]);
+  const payload = () => JSON.parse(JSON.stringify(exportSync(state, { id: 'pc', name: 'PC' }, at(WS_NOW))));
+  const withLinks = (links) => { const copy = payload(); copy.data.tasks[0].links = links; return copy; };
+  const good = { id: 'l1', url: 'https://b.example/x', label: 'B' };
+  assert.equal(mergeSync(fresh(), withLinks([good]), ctx(WS_NOW, 'phone')).state.tasks[0].links[0].url, good.url);
+  for (const links of [[{ ...good, url: 'javascript:alert(1)' }], 'x', [null], [{ ...good, id: '' }], [{ ...good, label: 'x'.repeat(81) }],
+    Array.from({ length: 21 }, (_, index) => ({ ...good, id: 'l' + index }))]) {
+    assert.throws(() => mergeSync(fresh(), withLinks(links), ctx(WS_NOW, 'phone')), /invalid task/);
+  }
+});
+
+test('WS-03: linkBlock ignores one trailing dot in the host', () => {
+  const now = at(WS_NOW);
+  const base = fresh();
+  const state = startFocus({ ...base, preferences: { ...base.preferences, domains: ['youtube.com'] } }, now);
+  assert.deepEqual(linkBlock(state, 'https://youtube.com./x', now), { source: 'focus' });
+});
+
+test('WS-04: workspace apps with a path over 260 characters are dropped', () => {
+  const now = at(WS_NOW);
+  const { state } = workspaceTask();
+  const long = 'C:\\' + 'a'.repeat(300) + '.exe';
+  const started = startFocus(state, now, { workspaceApps: [{ path: long, name: 'Long' }, { path: 'C:\\Apps\\Ok.exe', name: 'Ok' }] });
+  assert.deepEqual(started.focus.workspaceApps, [{ path: 'C:\\Apps\\Ok.exe', name: 'Ok' }]);
+});

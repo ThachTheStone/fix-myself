@@ -1,5 +1,5 @@
 import {
-  activeBlockRules, addToToday, applyPendingBlockChanges, applyPendingRuleChanges, cancelPendingBlockChange,
+  activeBlockRules, linkBlock, addToToday, applyPendingBlockChanges, applyPendingRuleChanges, cancelPendingBlockChange,
   cancelPendingRuleChange, cancelStrictExit, exitStrictHold, requestStrictExit, strictReview, STRICT_EXIT_SECONDS, tickStrict, captureTask, chromeCoverage,
   CHANGE_DELAYS, COUNTDOWN_SECONDS, DEFAULT_CHANGE_DELAY, deleteAppPreset, deleteBlockRule, distractionReview,
   recordChromeReports, ruleReview,
@@ -115,6 +115,7 @@ function applyState(nextState) {
   saveState(localStorage, nextState);
   state = nextState;
   render();
+  syncWorkspaces();
 }
 
 function attempt(change, feedback, success = '') {
@@ -193,6 +194,206 @@ function loadDevice() {
 const platformName = () => desktop ? 'windows' : nativeReminders ? 'android' : 'browser';
 
 // ---------------------------------------------------------------------------
+// Task workspaces (WS-01 to WS-05). Websites are a synced task field. Files,
+// folders and apps live in the desktop app's own registry; this window only
+// names them by id, so it can never make the desktop open a path it chose.
+
+const taskLinks = (task) => (Array.isArray(task?.links) ? task.links : []);
+const workspaceItemsEnabled = () => Boolean(desktop?.platform === 'win32' && desktop.workspaceOpen);
+const localItems = new Map();
+const strictApps = new Map();
+let workspaceTaskIds = null;
+let strictAppsSignature = null;
+
+// Called with the tasks' apps for strict holds, which start without a click (WB-02).
+const strictCtx = () => ({ ...ctx(), workspaceApps: (taskId) => strictApps.get(taskId) ?? [] });
+
+function strictTaskIds() {
+  const now = new Date().toISOString();
+  return state.tasks.filter((task) => isActive(task) && (task.workBlocks ?? []).some((block) => block.strict && block.end > now))
+    .map((task) => task.id).sort();
+}
+
+// Removes registry items of deleted tasks and reads the apps of tasks with a strict block.
+async function syncWorkspaces(force = false) {
+  if (!workspaceItemsEnabled()) return;
+  try {
+    const ids = state.tasks.map((task) => task.id);
+    const idSignature = ids.join('|');
+    if (idSignature !== workspaceTaskIds) {
+      workspaceTaskIds = idSignature;
+      await desktop.workspacePrune(ids);
+    }
+    const strictIds = strictTaskIds();
+    const signature = strictIds.join('|');
+    if (force || signature !== strictAppsSignature) {
+      strictAppsSignature = signature;
+      strictApps.clear();
+      for (const id of strictIds) strictApps.set(id, await desktop.workspaceApps(id));
+    }
+  } catch (error) {
+    reportError(error);
+  }
+}
+
+async function refreshLocalItems(taskId) {
+  if (!workspaceItemsEnabled()) return;
+  try {
+    localItems.set(taskId, await desktop.workspaceList(taskId));
+  } catch {
+    localItems.set(taskId, []);
+  }
+  if (currentView === 'task' && currentTaskId === taskId) {
+    sectionCache.delete('detail:workspace');
+    render();
+  }
+}
+
+function blockedLine(link, block) {
+  let host = link.url;
+  try {
+    host = new URL(link.url).hostname;
+  } catch {
+    // The stored link was validated; keep the raw text if it cannot be read.
+  }
+  const by = block.source === 'focus' ? t('workspace.byFocus') : block.name;
+  return h('span', {},
+    t('workspace.blocked', { host, by }), ' ',
+    h('a', { href: '#settings', class: 'text-link', text: t('workspace.changeInSettings') }));
+}
+
+function showLines(feedback, lines) {
+  feedback.replaceChildren(...lines.flatMap((line, index) => (index === 0 ? [line] : [' ', line])));
+}
+
+async function openWorkspace(taskId, feedback, only = null) {
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) return;
+  const urls = [];
+  const blocked = [];
+  for (const link of taskLinks(task).filter((item) => only === null || item.id === only)) {
+    const block = linkBlock(state, link.url);
+    if (block) blocked.push(blockedLine(link, block));
+    else urls.push(link.url);
+  }
+  let results = [];
+  try {
+    if (workspaceItemsEnabled()) {
+      results = await desktop.workspaceOpen({ taskId, urls, ...(only === null ? {} : { linksOnly: true }) });
+    } else {
+      for (const url of urls) window.open(url, '_blank', 'noopener');
+      results = urls.map((url) => ({ label: url, ok: true }));
+    }
+  } catch (error) {
+    feedback.textContent = translateError(error.message);
+    return;
+  }
+  const failed = results.filter((item) => !item.ok).map((item) => item.label);
+  if (results.length === 0 && blocked.length === 0) {
+    feedback.textContent = t('workspace.nothingToOpen');
+    return;
+  }
+  showLines(feedback, [
+    h('span', { text: t('workspace.opened', { n: results.length - failed.length }) }),
+    ...(failed.length ? [h('span', { text: t('workspace.failed', { labels: failed.join(', ') }) })] : []),
+    ...blocked
+  ]);
+}
+
+function renderWorkspace(task, fresh) {
+  const local = localItems.get(task.id);
+  if (fresh || !local) refreshLocalItems(task.id).catch(reportError);
+  element('workspace-local').hidden = !workspaceItemsEnabled();
+  const links = taskLinks(task);
+  const items = local ?? [];
+  if (cached('detail:workspace', [links, items, locale()])) return;
+  element('workspace-empty').hidden = links.length + items.length > 0;
+  const remove = (label, onclick) => h('button', {
+    type: 'button', class: 'text-button', text: t('common.remove'), 'aria-label': t('workspace.removeItem', { label }), onclick
+  });
+  element('workspace-list').replaceChildren(
+    ...links.map((link) => h('li', { class: 'subtask' },
+      h('span', {},
+        h('span', { class: 'muted', text: t('workspace.kind.link') + ' ' }),
+        h('a', {
+          href: link.url, target: '_blank', rel: 'noopener noreferrer', text: link.label,
+          // The desktop window denies new windows, so it opens the site through the main process.
+          onclick: workspaceItemsEnabled() ? (event) => {
+            event.preventDefault();
+            openWorkspace(task.id, element('workspace-feedback'), link.id).catch(reportError);
+          } : null
+        })),
+      remove(link.label, () => editTask({ links: links.filter((other) => other.id !== link.id) }, element('workspace-feedback'))))),
+    ...items.map((item) => h('li', { class: 'subtask' },
+      h('span', {},
+        h('span', { class: 'muted', text: t('workspace.kind.' + item.kind) + ' ' }),
+        item.label,
+        item.missing ? h('span', { class: 'muted', text: ' · ' + t('workspace.missing') }) : null),
+      remove(item.label, async () => {
+        try {
+          await desktop.workspaceRemove(item.id);
+          await refreshLocalItems(task.id);
+          await syncWorkspaces(true);
+        } catch (error) {
+          element('workspace-feedback').textContent = translateError(error.message);
+        }
+      }))));
+}
+
+function wireWorkspace() {
+  const feedback = element('workspace-feedback');
+  const linkCount = () => taskLinks(state.tasks.find((item) => item.id === currentTaskId)).length;
+  element('workspace-link-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const { url, label } = event.target.elements;
+    const task = state.tasks.find((item) => item.id === currentTaskId);
+    if (!task) return;
+    const link = { url: url.value, label: label.value };
+    if (!editTask({ links: [...taskLinks(task), link] }, feedback)) return;
+    const saved = taskLinks(state.tasks.find((item) => item.id === task.id)).at(-1);
+    url.value = '';
+    label.value = '';
+    // A blocked site is still kept; it is only left out when the workspace opens (WS-03).
+    const block = linkBlock(state, saved.url);
+    if (block) showLines(feedback, [blockedLine(saved, block)]);
+  });
+  const addLocal = async (add) => {
+    feedback.textContent = '';
+    try {
+      const item = await add();
+      if (item) await refreshLocalItems(currentTaskId);
+      await syncWorkspaces(true);
+    } catch (error) {
+      feedback.textContent = translateError(error.message);
+    }
+  };
+  element('workspace-add-file').addEventListener('click', () => addLocal(
+    () => desktop.workspacePick({ taskId: currentTaskId, kind: 'file', linkCount: linkCount() })));
+  element('workspace-add-folder').addEventListener('click', () => addLocal(
+    () => desktop.workspacePick({ taskId: currentTaskId, kind: 'folder', linkCount: linkCount() })));
+  element('workspace-add-app').addEventListener('click', async () => {
+    feedback.textContent = '';
+    try {
+      const apps = await desktop.listApps();
+      element('workspace-open-apps').replaceChildren(...apps.map((app) => h('option', { value: app.path, text: app.name })));
+      element('workspace-app-picker').hidden = false;
+      if (apps.length === 0) feedback.textContent = t('workspace.noApps');
+    } catch {
+      feedback.textContent = t('workspace.appListFailed');
+    }
+  });
+  element('workspace-app-confirm').addEventListener('click', () => {
+    const path = element('workspace-open-apps').value;
+    if (!path) return;
+    addLocal(() => desktop.workspaceAddApp({ taskId: currentTaskId, path, linkCount: linkCount() }))
+      .then(() => { element('workspace-app-picker').hidden = true; });
+  });
+  element('workspace-open').addEventListener('click', () => {
+    openWorkspace(currentTaskId, feedback).catch(reportError);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Focus and Chrome
 
 function syncChrome() {
@@ -234,7 +435,7 @@ function checkRuleChanges() {
 function checkStrict() {
   try {
     let next = applyPendingBlockChanges(state, ctx());
-    if (!nativeReminders) next = tickStrict(next, ctx());
+    if (!nativeReminders) next = tickStrict(next, strictCtx());
     next = settleFocus(next, ctx());
     if (next !== state) applyState(next);
   } catch (error) {
@@ -307,6 +508,9 @@ function renderTimer(now = Date.now()) {
       : task ? t('focusTask.working', { title: task.title }) : t('focusTask.wandering');
     if (current.textContent !== text) current.textContent = text;
   }
+  const workspaceTask = running && state.focus.taskId && state.tasks.some((item) => item.id === state.focus.taskId);
+  element('focus-workspace').hidden = !workspaceTask;
+  if (!workspaceTask && element('focus-workspace-feedback').textContent) element('focus-workspace-feedback').textContent = '';
   element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !running);
   const covered = chromeCoverage(state, now, extensionManifest.version).filter((profile) => profile.current).length;
   const coverage = covered === 0 ? t('focus.noCoverage') : t('focus.coverage', { n: covered });
@@ -523,7 +727,7 @@ function renderDetail(fresh) {
   element('detail-body').hidden = !task;
   if (fresh) {
     for (const key of [...sectionCache.keys()]) if (key.startsWith('detail:')) sectionCache.delete(key);
-    for (const id of ['detail-feedback', 'commitment-feedback', 'subtask-feedback', 'block-feedback', 'review-feedback']) {
+    for (const id of ['detail-feedback', 'commitment-feedback', 'subtask-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback']) {
       element(id).textContent = '';
     }
   }
@@ -602,6 +806,8 @@ function renderDetail(fresh) {
           })));
     }));
   }
+
+  renderWorkspace(task, fresh);
 
   const waiting = (state.pendingBlockChanges ?? []).filter((change) => change.taskId === task.id);
   if (!cached('detail:pendingBlocks', waiting)) {
@@ -1537,11 +1743,18 @@ function wireToday() {
       missionDialog.close();
     }
   });
-  element('start-focus').addEventListener('click', () => {
+  element('start-focus').addEventListener('click', async () => {
     const select = element('focus-preset');
     const options = select.hidden ? {} : { presetId: select.value || null };
     options.taskId = element('focus-task').value || null;
+    // The apps of the task's workspace are allowed for the session (WS-04).
+    if (options.taskId && workspaceItemsEnabled()) {
+      options.workspaceApps = await desktop.workspaceApps(options.taskId).catch(() => []);
+    }
     attempt(() => startFocus(state, new Date(), { ...options, device: device.id }));
+  });
+  element('focus-workspace').addEventListener('click', () => {
+    if (state.focus?.taskId) openWorkspace(state.focus.taskId, element('focus-workspace-feedback')).catch(reportError);
   });
   element('pause-focus').addEventListener('click', () => {
     attempt(() => state.focus?.segmentStart == null ? resumeFocus(state, ctx()) : pauseFocus(state, ctx()));
@@ -1800,9 +2013,10 @@ async function boot() {
   if (presetsEnabled()) element('app-presets').hidden = false;
   // Settle first so a session left open while the app was closed is recorded with this device's id.
   // A damaged local record must not stop Today from opening; the interval retries and reports.
+  await syncWorkspaces();
   try {
     state = applyPendingBlockChanges(state, ctx());
-    if (!nativeReminders) state = tickStrict(state, ctx());
+    if (!nativeReminders) state = tickStrict(state, strictCtx());
     state = settleFocus(state, ctx());
   } catch (error) {
     reportError(error);
@@ -1814,6 +2028,7 @@ async function boot() {
 
   wireToday();
   wireDetail();
+  wireWorkspace();
   wireReview();
   wireRules();
   wirePresets();

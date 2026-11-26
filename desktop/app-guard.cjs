@@ -31,7 +31,7 @@ function validLimit(limit) {
   if (!text(limit.name, 60) || !STRENGTHS.has(limit.strength)) return undefined;
   if (!whole(limit.countdownSeconds, 5, 60) || !whole(limit.passMinutes, 1, 30)) return undefined;
   if (!(limit.nextAction === null || limit.nextAction === undefined || (typeof limit.nextAction === 'string' && limit.nextAction.length <= 160))) return undefined;
-  if (!Array.isArray(limit.apps) || limit.apps.length === 0 || limit.apps.length > 30) return undefined;
+  if (!Array.isArray(limit.apps) || limit.apps.length === 0 || limit.apps.length > 50) return undefined;
   const apps = [];
   for (const app of limit.apps) {
     if (!app || !text(app.path, 260) || !/\.exe$/i.test(app.path) || !text(app.name, 80)) return undefined;

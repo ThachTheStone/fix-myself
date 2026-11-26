@@ -46,6 +46,8 @@
           <label for="focus-task" class="visually-hidden" id="focus-task-label" data-i18n="focusTask.label">Task for this session</label>
           <select id="focus-task"></select>
           <p id="focus-current" class="focus-status" hidden></p>
+          <button type="button" class="text-button" id="focus-workspace" data-i18n="workspace.open" hidden>Open workspace</button>
+          <p id="focus-workspace-feedback" class="focus-status" role="status"></p>
           <select id="focus-preset" data-i18n-aria-label="apps.todayLabel" aria-label="Apps for this session" hidden></select>
           <button type="button" class="button focus-button" id="start-focus" data-i18n="today.startFocus">Start focus</button>
           <button type="button" class="button focus-button" id="pause-focus" data-i18n="focusTask.pause" hidden>Pause</button>
@@ -193,6 +195,32 @@
               <button class="button secondary" type="submit" data-i18n="common.add">Add</button>
             </form>
             <p id="subtask-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" aria-labelledby="workspace-label">
+            <h2 id="workspace-label" data-i18n="workspace.title">Workspace</h2>
+            <p class="muted" data-i18n="workspace.help">Websites sync between devices. Files, folders and apps stay on this computer.</p>
+            <p id="workspace-empty" class="muted" data-i18n="workspace.empty">Nothing added yet.</p>
+            <ul id="workspace-list" class="compact-list"></ul>
+            <form id="workspace-link-form" class="inline-fields">
+              <label for="workspace-url" class="visually-hidden" data-i18n="workspace.url">Website address</label>
+              <input id="workspace-url" name="url" maxlength="2048" placeholder="https://example.com/page" data-i18n-placeholder="workspace.urlPlaceholder" required>
+              <label for="workspace-link-label" class="visually-hidden" data-i18n="workspace.label">Name (optional)</label>
+              <input id="workspace-link-label" name="label" maxlength="80" placeholder="Name (optional)" data-i18n-placeholder="workspace.label">
+              <button class="button secondary" type="submit" data-i18n="workspace.addWebsite">Add website</button>
+            </form>
+            <div id="workspace-local" class="task-actions" hidden>
+              <button type="button" class="button secondary" id="workspace-add-file" data-i18n="workspace.addFile">Add file</button>
+              <button type="button" class="button secondary" id="workspace-add-folder" data-i18n="workspace.addFolder">Add folder</button>
+              <button type="button" class="button secondary" id="workspace-add-app" data-i18n="workspace.addApp">Add app</button>
+            </div>
+            <div id="workspace-app-picker" hidden>
+              <label for="workspace-open-apps" data-i18n="workspace.appList">Apps with an open window</label>
+              <select id="workspace-open-apps"></select>
+              <button type="button" class="button secondary" id="workspace-app-confirm" data-i18n="workspace.addSelectedApp">Add selected app</button>
+            </div>
+            <button type="button" class="button primary" id="workspace-open" data-i18n="workspace.open">Open workspace</button>
+            <p id="workspace-feedback" class="feedback" role="status"></p>
           </section>
 
           <section class="panel settings-panel" aria-labelledby="blocks-label">

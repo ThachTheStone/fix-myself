@@ -36,7 +36,7 @@ export const ALWAYS_ALLOWED_APPS = [
 // Fields that sync between devices. Each carries its own edit stamp.
 export const TASK_FIELDS = [
   'title', 'status', 'pinned', 'supportsMission', 'nextStep', 'effortMinutes', 'criteria',
-  'subtasks', 'workBlocks', 'plannedDate', 'deadline', 'commitment', 'remind', 'source', 'review'
+  'subtasks', 'workBlocks', 'plannedDate', 'deadline', 'commitment', 'remind', 'source', 'review', 'links'
 ];
 export const REVIEW_RESULTS = ['unreviewed', 'met', 'partly_met', 'needs_review'];
 export const REVIEW_LABELS = { unreviewed: 'Unreviewed', met: 'Met', partly_met: 'Partly met', needs_review: 'Needs review' };
@@ -127,6 +127,7 @@ function blankTask(c) {
     remind: { start: true, deadline: true },
     source: null,
     review: null,
+    links: [],
     createdAt: c.at,
     completedAt: null,
     events: [],
@@ -244,6 +245,26 @@ export function normalizeDomains(text) {
   return [...new Set(hosts)];
 }
 
+const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+
+// Tells whether a task website is covered by the running focus or an active
+// block rule (WS-03). Returns null when it can be opened.
+export function linkBlock(state, url, now = new Date()) {
+  let host;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+  } catch {
+    return null;
+  }
+  if (isFocused(state.focus, now.getTime()) && (state.focus.domains ?? []).some((domain) => hostMatches(host, domain))) {
+    return { source: 'focus' };
+  }
+  for (const { rule } of activeBlockRules(state, now)) {
+    if ((rule.domains ?? []).some((domain) => hostMatches(host, domain))) return { source: 'rule', name: rule.name };
+  }
+  return null;
+}
+
 export function parseLeadTimes(text) {
   const values = String(text).split(/[\s,]+/).filter(Boolean).map(Number);
   if (values.some((value) => !Number.isInteger(value) || value < 0 || value > 10_080)) {
@@ -268,6 +289,9 @@ function cleanText(value, max, label) {
   if (text.length > max) throw new Error(`${label} must be ${max} characters or fewer.`);
   return text;
 }
+
+const MAX_LINKS = 20;
+const MAX_WORKSPACE_APPS = 20;
 
 function validateChanges(task, changes) {
   const next = {};
@@ -351,6 +375,23 @@ function validateChanges(task, changes) {
         }
         if (!REVIEW_RESULTS.includes(value.result)) throw new Error('Choose a review result.');
         next.review = { result: value.result, evidence: cleanText(value.evidence, 1000, 'The evidence note') };
+        break;
+      case 'links':
+        if (!Array.isArray(value) || value.length > MAX_LINKS) throw new Error('Add up to 20 items to a workspace.');
+        next.links = value.map((item) => {
+          const url = String(item?.url ?? '').trim();
+          let parsed = null;
+          try {
+            parsed = url.length <= 2048 ? new URL(url) : null;
+          } catch {
+            parsed = null;
+          }
+          if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+            throw new Error('Add websites as http or https links.');
+          }
+          const label = cleanText(item.label, 80, 'The website name') || parsed.hostname;
+          return { id: item.id ?? newId(), url, label };
+        });
         break;
       case 'source':
         next.source = value ?? null;
@@ -705,6 +746,13 @@ function copyPreset(preset) {
   };
 }
 
+function cleanWorkspaceApps(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, MAX_WORKSPACE_APPS)
+    .filter((app) => app && typeof app.path === 'string' && app.path && app.path.length <= 260)
+    .map((app) => ({ path: app.path, name: String(app.name || app.path.split(/[\\/]/).pop()).slice(0, 80) }));
+}
+
 // `options.presetId` is undefined for sessions that should not touch the app
 // limit, null for a manual "No app limit" choice, or a preset id (APP-02).
 export function startFocus(state, now = new Date(), options = {}) {
@@ -739,6 +787,7 @@ export function startFocus(state, now = new Date(), options = {}) {
       blockUntil: blocking ? Math.max(endAt, state.focus.blockUntil ?? state.focus.endAt) : endAt,
       domains: blocking ? [...new Set([...state.focus.domains, ...domains])] : [...domains],
       apps: preset,
+      workspaceApps: cleanWorkspaceApps(options.workspaceApps),
       segmentStart: now.getTime(),
       endedAt: null
     }
@@ -919,6 +968,18 @@ export function miniTimerView(state, now = new Date()) {
   };
 }
 
+function mergeAppLists(first, second) {
+  const seen = new Set();
+  const out = [];
+  for (const app of [...first, ...second]) {
+    const key = app.path.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ path: app.path, name: app.name });
+  }
+  return out;
+}
+
 // What the desktop guard needs to limit apps during the running session
 // (APP-03). Null when no session with a preset is running.
 export function appLimitSnapshot(state, now = new Date()) {
@@ -928,7 +989,7 @@ export function appLimitSnapshot(state, now = new Date()) {
     endAt: state.focus.endAt,
     presetId: apps.presetId ?? null,
     name: apps.name,
-    apps: apps.apps.map((app) => ({ path: app.path, name: app.name })),
+    apps: mergeAppLists(apps.apps, state.focus.workspaceApps ?? []),
     strength: apps.strength,
     countdownSeconds: apps.countdownSeconds,
     passMinutes: apps.passMinutes,
@@ -1149,6 +1210,20 @@ export function exportSync(state, device, now = new Date()) {
   };
 }
 
+function validSyncedLinks(links) {
+  if (!Array.isArray(links) || links.length > MAX_LINKS) return false;
+  return links.every((link) => {
+    if (!link || typeof link !== 'object' || typeof link.id !== 'string' || link.id.length < 1 || link.id.length > 64) return false;
+    if (typeof link.url !== 'string' || link.url.length > 2048 || typeof link.label !== 'string' || link.label.length > 80) return false;
+    try {
+      const { protocol } = new URL(link.url);
+      return protocol === 'http:' || protocol === 'https:';
+    } catch {
+      return false;
+    }
+  });
+}
+
 function validatePayload(payload) {
   if (payload?.format !== SYNC_FORMAT || payload.version !== 1 || typeof payload.deviceId !== 'string'
       || typeof payload.exportedAt !== 'string' || !Array.isArray(payload.data?.tasks)) {
@@ -1156,6 +1231,9 @@ function validatePayload(payload) {
   }
   for (const task of payload.data.tasks) {
     if (typeof task.id !== 'string' || typeof task.title !== 'string' || !STATUSES.includes(task.status)) {
+      throw new Error('The sync file contains an invalid task.');
+    }
+    if (task.links !== undefined && !validSyncedLinks(task.links)) {
       throw new Error('The sync file contains an invalid task.');
     }
   }
@@ -1969,6 +2047,7 @@ export function tickStrict(state, ctx) {
     const auto = working.preferences.autoAppPreset;
     const options = { taskId: task.id, device: c.device };
     if (auto && (working.appPresets ?? []).some((preset) => preset.id === auto)) options.presetId = auto;
+    options.workspaceApps = typeof ctx?.workspaceApps === 'function' ? ctx.workspaceApps(task.id) : [];
     working = startFocus(working, c.now, options);
   } else if (working.focus.taskId !== task.id) {
     if (working.focus.segmentStart != null) working = addSegment(working, working.focus, nowMs, c);
