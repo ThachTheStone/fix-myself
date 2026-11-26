@@ -3,7 +3,7 @@
 
 | Document field | Value |
 |---|---|
-| Version | 0.8 |
+| Version | 0.9 |
 | Status | Draft for implementation |
 | Date | 2026-11-26 |
 | Initial platforms | Windows 11 and privately installed Android |
@@ -12,11 +12,11 @@
 
 ## 1. Purpose and scope
 
-The app helps one person remember their mission and schedule, turn commitments into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. A session can also allow only the Windows apps the person chose for that work. Outside focus, block rules the person sets in advance limit the cues that start unplanned scrolling. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
+The app helps one person remember their mission and schedule, turn deadlines into achievable work, and reduce unplanned scrolling. It opens the **Today** view at Windows sign-in. During a focus session, attempts to open selected distractions bring the person back to today's plan. A session can also allow only the Windows apps the person chose for that work. Outside focus, block rules the person sets in advance limit the cues that start unplanned scrolling. A weekly review shows task delivery, completion quality, distraction trends, and recorded workouts.
 
 | Capability | Windows 11 | Android private pilot |
 |---|---|---|
-| Daily planning | Today at sign-in, task inbox, commitments, timeline, and reminders | Today, task inbox, commitments, timeline, and reminders |
+| Daily planning | Today at sign-in, task inbox, deadlines, timeline, and reminders | Today, task inbox, deadlines, timeline, and reminders |
 | Focus | First sign-in session and manual sessions. Chrome website blocking ships first. Edge follows in compatibility testing. | Optional participation in a synced desktop session. Native-app blocking is subject to on-device validation. |
 | Allowed apps | Optional per-session list of allowed Windows apps, chosen at session start from presets | Not available. Android app interception follows FOC-07. |
 | Block rules | Scheduled or always-on Pause and Block rules for websites in Chrome | Rules sync to the phone. App rules follow after FOC-07 validation. |
@@ -33,10 +33,9 @@ The app helps one person remember their mission and schedule, turn commitments i
 ## 2. Terms and key views
 
 - **Mission** is a short statement of the outcome or direction the user wants to keep in mind.
-- **Inbox** holds newly captured and imported tasks before the user commits or adds them to Today.
-- **Commitment** records the outcome the user intends to deliver and the time they committed to it.
+- **Inbox** holds newly captured and imported tasks until the user gives them a deadline, a planned day, a work block or a priority.
 - **Work block** reserves time on the schedule. A task may have several work blocks.
-- **Deadline** is when the outcome is due. It may exist without a work block.
+- **Deadline** is the time the user intends to deliver a task by. It may exist without a work block. Every task with a deadline, child tasks included, counts toward delivery in the weekly review; what "delivered" means is set by its completion criteria (TASK-01).
 - **Today** shows the mission, priorities, next action, planned work, approaching deadlines, carryovers, and focus status.
 - **Block rule** is a user-defined list of websites with a schedule and a strength. It applies whether or not a focus session is running.
 - **Pause** is a rule strength that delays a visit and lets the user continue for a limited pass after stating a reason. **Block** allows no way through while the rule is active.
@@ -47,14 +46,14 @@ The app helps one person remember their mission and schedule, turn commitments i
 - **Task session** is a focus session linked to one task. A **wandering session** is a focus session linked to no task. Its time is recorded but counts toward no task.
 - **Strict work block** is a work block that, during its time, holds the user on its task until the task is completed or the block's limit is reached.
 
-## 3. Daily plan, commitments, and reminders
+## 3. Daily plan, deadlines, and reminders
 
 | ID | Requirement |
 |---|---|
 | DAY-01 | When startup is enabled, the Windows app shall open Today after interactive sign-in. It shall display the local plan while connected services refresh in the background. Startup runs in the signed-in user's session. Its launch order is controlled by Windows. [Windows startup behavior](https://support.microsoft.com/en-us/windows/experience/startup-boot/configure-startup-applications-in-windows) |
 | DAY-02 | The user shall be able to set a mission, pin up to three priorities, and choose a next action. Today shall show carryovers from previous days. Adding a carryover to today's plan shall preserve its existing deadline. |
 | TASK-01 | The app shall support quick capture with a title and an initial open status. Optional fields shall include mission, priority, next action, effort estimate, completion criteria, planned work blocks, and deadline. Completion criteria shall be a checklist of up to 50 items that the user ticks; a task may have none. Supported task states shall be open, in progress, completed, and canceled. |
-| TASK-02 | The user shall be able to record a commitment and attach it to a task. The timeline shall show the commitment time, scheduled work, original and revised deadlines, completion, and reopen events. Rescheduling a work block shall leave the deadline unchanged. |
+| TASK-02 | The timeline of a task shall show scheduled work, original and revised deadlines, completion, and reopen events. Rescheduling a work block shall leave the deadline unchanged. |
 | REM-01 | The user shall be able to set reminders for a planned start or deadline, configure lead times, snooze a reminder, and choose a default notification device. Updating the triggering time shall replace future reminders tied to that trigger. Completing or canceling a task shall cancel its pending reminders. |
 | TASK-03 | A task may have a parent task, so work can be broken down into a tree, for example a payment module into functions and each function into steps. Each child is a full task with its own status, completion criteria, work blocks, deadline, reminders and focus time. A tree shall be at most 5 levels deep and a task shall have at most 50 children. The user shall be able to add a child task and move a task under another task or to the top level. The app shall refuse a move that would put a task under itself or one of its descendants, or exceed the depth limit. The completion criteria checklist of TASK-01 remains available on every task. |
 | TASK-04 | A parent task shall be completed or canceled only when every child is completed or canceled. Reopening a child of a closed parent shall reopen that parent and any closed ancestors. An open task shall not be added or moved under a closed parent until the parent is reopened. Focus time shown on a parent shall include its whole subtree, next to its own time. A child whose deadline is later than its parent's shall be flagged without being blocked. |
@@ -154,7 +153,7 @@ A task can keep the websites, documents, and apps used to work on it, so one cli
 | AI-03 | The app shall execute approved actions only through supported operations for tasks, app-created calendar blocks, reminders, and future focus settings. The action log shall show what was approved and the result. This permission model excludes terminal command execution, arbitrary file access, unrestricted OS control, and operation of the Android blocking service. |
 | AI-04 | The app shall validate AI output and treat imported text as data. Calendar event descriptions, browser content, workout photos, Strava data, and raw phone usage shall stay outside AI inputs. The app shall perform calendar conflict checks. Manual planning, reminders, and focus shall remain usable if AI is unavailable. |
 
-**Example workflow.** A task is committed for Friday at 17:00. The assistant proposes an outline, a draft, and a review, then previews blocks around existing meetings. The user approves the blocks. Moving the draft block to Thursday preserves Friday's deadline.
+**Example workflow.** A task is due Friday at 17:00. The assistant proposes an outline, a draft, and a review, then previews blocks around existing meetings. The user approves the blocks. Moving the draft block to Thursday preserves Friday's deadline.
 
 ## 6. GitHub issues as tasks
 
@@ -162,18 +161,18 @@ A task can keep the websites, documents, and apps used to work on it, so one cli
 |---|---|
 | GH-01 | The user shall connect GitHub through a GitHub App with read-only Issues access to selected repositories. The app shall support public and private repositories within the user's authorized access. Repository selection and app permissions shall limit the scope of imports. [GitHub App installation](https://docs.github.com/en/apps/using-github-apps/installing-a-github-app-from-a-third-party) · [GitHub App user authorization](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app) |
 | GH-02 | The default import rule shall put open issues assigned to the connected user into the task inbox from selected repositories. The user shall also be able to import a specific issue by GitHub URL if it is in an authorized repository. The app shall filter out pull requests from the Issues API response. [GitHub Issues API](https://docs.github.com/en/rest/issues/issues#list-repository-issues) |
-| GH-03 | The app shall create at most one linked task per GitHub issue for the account, using GitHub's issue identifier to reconcile automatic import, manual import, retries, and concurrent sync. It shall display the repository, issue number, title, canonical link, labels, assignees, and GitHub status. Imported tasks shall support commitments, completion criteria, personal deadlines, work blocks, reminders, and completion review. |
+| GH-03 | The app shall create at most one linked task per GitHub issue for the account, using GitHub's issue identifier to reconcile automatic import, manual import, retries, and concurrent sync. It shall display the repository, issue number, title, canonical link, labels, assignees, and GitHub status. Imported tasks shall support completion criteria, personal deadlines, work blocks, reminders, and completion review. |
 | GH-04 | The app shall refresh source metadata, display the last successful sync time, and preserve the user's edits to their personal task. Closed, reopened, or reassigned issues shall be flagged for review. A previously imported issue shall remain linked if it stops matching the import filter. Local task completion and GitHub issue state shall each have their own status. The integration shall have read-only access, so issue edits and closures happen in GitHub. |
 | GH-05 | When a user asks the AI to plan an imported task, they shall choose which issue context to share before any GitHub-sourced text is sent to the provider. The app shall honor repository access restrictions, and text from an issue shall never authorize an app action. |
-| GH-06 | Planned tasks shall remain available offline, with freshness displayed. If the user disconnects GitHub or the app detects revoked repository access, it shall stop refreshing and remove the affected imported issue details from its cache, including on the next sync from linked devices. User-authored notes, commitments, and schedules shall be preserved. |
+| GH-06 | Planned tasks shall remain available offline, with freshness displayed. If the user disconnects GitHub or the app detects revoked repository access, it shall stop refreshing and remove the affected imported issue details from its cache, including on the next sync from linked devices. User-authored notes, criteria, and schedules shall be preserved. |
 
-**Example workflow.** An assigned issue appears in the inbox. The user commits to fixing it, adds a personal deadline, and approves a work block around meetings. If a teammate closes the GitHub issue, the app asks the user to review the task and keeps its planned block until the user changes it.
+**Example workflow.** An assigned issue appears in the inbox. The user adds a personal deadline and approves a work block around meetings. If a teammate closes the GitHub issue, the app asks the user to review the task and keeps its planned block until the user changes it.
 
 ## 7. Weekly review and workout evidence
 
 | ID | Requirement |
 |---|---|
-| REV-01 | The selected date range shall show commitments due, completed commitments, on-time completions, and carryovers. The denominator for on-time rate shall be commitments due in that period, excluding cancellations. The numerator shall be those completed by their applicable deadline. Show original and revised deadlines alongside rescheduled items. Display undated tasks separately and show an unavailable rate when there are no eligible commitments. |
+| REV-01 | The selected date range shall show tasks due in that period, those of them completed, on-time completions, and carryovers. The denominator for on-time rate shall be tasks with a deadline in that period, excluding cancellations. The numerator shall be those completed by their applicable deadline. Show original and revised deadlines alongside rescheduled items. Show an unavailable rate when no task is due in the period. |
 | REV-02 | The assistant shall review a selected task against its completion criteria and which of them were ticked. It shall ask what was delivered and what evidence the user has, then propose **Met**, **Partly met**, or **Needs review**. The user shall confirm the result. Tasks can remain **Unreviewed**, including when criteria were never defined. |
 | REV-03 | Distraction reporting shall show estimated Android foreground minutes by selected app and Windows blocked attempts by site. The user shall be able to set daily thresholds for tracked Android apps. The app shall mark data gaps and show week-over-week comparisons when periods have comparable coverage. Minutes and blocked attempts shall be displayed independently. |
 | REV-04 | The user shall be able to log workout date, type, and duration, and optionally attach a photo through the device picker. The app shall label entries **Self-reported** or **Photo attached**. By default, only the workout entry syncs and the photo stays on the device that added it. [Android photo picker](https://developer.android.com/training/data-storage/shared/photopicker) |
@@ -183,7 +182,7 @@ A task can keep the websites, documents, and apps used to work on it, so one cli
 
 | ID | Requirement |
 |---|---|
-| SYS-01 | The system shall use stable IDs for tasks, commitments, work blocks, reminders, focus sessions and their time segments, synced devices, and approved actions. Integration links shall retain provider identifiers and last successful refresh times. Daily boundaries shall use the user's planning time zone. Running session end times shall remain fixed when time zones change. |
+| SYS-01 | The system shall use stable IDs for tasks, work blocks, reminders, focus sessions and their time segments, synced devices, and approved actions. Integration links shall retain provider identifiers and last successful refresh times. Daily boundaries shall use the user's planning time zone. Running session end times shall remain fixed when time zones change. |
 | SYS-02 | Windows and Android shall cache Today, tasks, reminders, and active focus rules for offline use. The user shall be able to edit tasks offline. Reconnect shall reconcile updates without duplication. Conflicting edits to the same field shall surface both values for resolution. Deletions shall propagate so reconnecting devices cannot restore removed items silently. |
 | SYS-03 | Pair devices to the same private account. Integrations and OS permissions shall be opt-in. Credentials shall be stored using protected storage, and network traffic shall be encrypted. The user shall be able to unlink a device, disconnect an integration, and see which capabilities depend on each permission. |
 | SYS-04 | With user consent, sync only the daily totals needed for the phone usage report. Raw usage events shall stay on the phone. The app shall avoid collecting notification text, keystrokes, screenshots, page contents, and full browsing history. The extension shall receive only the planning data required for its intervention. |
@@ -217,7 +216,7 @@ A task can keep the websites, documents, and apps used to work on it, so one cli
 ## 10. Implementation sequence and open validation
 
 1. Validate Windows sign-in and Chrome blocking. In parallel with that implementation phase, validate Android usage and app interruption on the actual POCO device. Treat Android blocking as unverified until A-03 passes.
-2. Build Today, the task inbox, commitments, deadlines, reminders, and device sync.
+2. Build Today, the task inbox, deadlines, reminders, and device sync.
 3. Integrate GitHub issue import, Google Calendar, and the approval-based AI assistant.
 4. Deliver the weekly dashboard, Android usage alerts, and manual and photo-backed workout tracking. Add Edge compatibility testing after the Chrome baseline.
 5. Evaluate a permitted Strava activity display and iPhone focus support. Validate individual Screen Time authorization and the distribution entitlement before committing to equivalent iPhone blocking. [Apple Screen Time API](https://developer.apple.com/videos/play/wwdc2022/110336/) · [Apple Family Controls entitlement](https://developer.apple.com/documentation/xcode/configuring-family-controls)
