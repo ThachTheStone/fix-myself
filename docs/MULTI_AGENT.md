@@ -11,6 +11,7 @@ Cline với DeepSeek). Mục tiêu là giảm chi phí cho mỗi việc hoàn th
 | Worker Claude | Subagent `implementer` ([.claude/agents/implementer.md](../.claude/agents/implementer.md), Haiku) | Làm một brief trong worktree riêng, chạy test, commit. |
 | Worker Cline | Cline CLI với DeepSeek qua [scripts/dispatch-cline.sh](../scripts/dispatch-cline.sh) | Như worker Claude, chạy ngoài phiên Claude Code. Mã nguồn được gửi tới DeepSeek. |
 | Review | Subagent `reviewer` ([.claude/agents/reviewer.md](../.claude/agents/reviewer.md), Sonnet) | Chỉ đọc. So nhánh của worker với brief và SRS, chạy test, báo lỗi theo mức độ. |
+| Phản biện | Subagent `critic` ([.claude/agents/critic.md](../.claude/agents/critic.md), Opus) | Chỉ đọc. Phản biện đề xuất của người dùng và của điều phối, thay đổi SRS và brief trước khi giao worker. Tìm mâu thuẫn, kẽ hở và lựa chọn còn bỏ ngỏ. Không soát code từng dòng; việc đó là của reviewer. |
 | Người dùng | Chủ sản phẩm | Duyệt yêu cầu mới, quyết định merge vào `main`, cho phép gửi mã ra dịch vụ ngoài. |
 
 ## Khi nào giao cho worker
@@ -28,17 +29,21 @@ Worker thất bại hai vòng liên tiếp trên cùng một brief thì điều 
 
 1. **Brief.** Điều phối viết brief theo [docs/briefs/TEMPLATE.md](briefs/TEMPLATE.md), lưu ở `docs/briefs/<task>.md`.
    Brief chỉ chứa phần riêng của việc; quy tắc chung nằm ở `AGENTS.md` và tài liệu này để tận dụng prompt cache.
-2. **Giao việc.**
+2. **Phản biện.** Với việc có thay đổi SRS, quy tắc chặn, work block nghiêm ngặt, đồng bộ hoặc bảo mật, điều phối gửi
+   đề xuất và brief cho subagent `critic` trước khi giao. Sửa brief theo các mục "Must change", và hỏi người dùng các
+   câu thuộc quyền quyết định của họ. Dùng lại cùng một critic trong một phiên (SendMessage) để khỏi đọc lại tài liệu từ
+   đầu.
+3. **Giao việc.**
    - Worker Claude: điều phối gọi subagent `implementer` với `isolation: worktree` và đường dẫn brief.
    - Worker Cline: `scripts/dispatch-cline.sh <task> docs/briefs/<task>.md [base-ref]`. Script tạo worktree
      `../fix-myselt-<task>` trên nhánh `agent/<task>`, chạy Cline, rồi chạy kiểm tra và ghi báo cáo vào
      `.agent-runs/<task>/`. Chạy lại cùng `<task>` sẽ dùng lại worktree cho vòng sửa tiếp theo.
-3. **Kiểm tra tự động.** Unit test, build, `git diff --check` và browser test (trừ test extension Chrome, vì cổng
+4. **Kiểm tra tự động.** Unit test, build, `git diff --check` và browser test (trừ test extension Chrome, vì cổng
    `127.0.0.1:42631` có thể đang do app desktop giữ).
-4. **Review.** Subagent `reviewer` cho việc trung bình trở lên; điều phối luôn đọc phần rủi ro.
-5. **Sửa.** Gửi lại worker với brief hẹp `docs/briefs/<task>-fix-N.md`, hoặc điều phối tự sửa nếu nhỏ và khó.
-6. **Ghi kết quả** vào [docs/agent-runs.md](agent-runs.md): worker, số vòng, kết quả test, lỗi review, chi phí ước tính.
-7. **Merge** vào nhánh làm việc sau khi người dùng đồng ý. Không push nhánh `agent/*` trừ khi người dùng yêu cầu.
+5. **Review.** Subagent `reviewer` cho việc trung bình trở lên; điều phối luôn đọc phần rủi ro.
+6. **Sửa.** Gửi lại worker với brief hẹp `docs/briefs/<task>-fix-N.md`, hoặc điều phối tự sửa nếu nhỏ và khó.
+7. **Ghi kết quả** vào [docs/agent-runs.md](agent-runs.md): worker, số vòng, kết quả test, lỗi review, chi phí ước tính.
+8. **Merge** vào nhánh làm việc sau khi người dùng đồng ý. Không push nhánh `agent/*` trừ khi người dùng yêu cầu.
 
 ## Quy tắc bắt buộc cho worker
 
