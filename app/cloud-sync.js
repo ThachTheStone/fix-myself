@@ -312,7 +312,10 @@ export function createCloudSync({
       // One push against the revision just read. Bind only after it succeeded: a conflict means
       // another device wrote first, and this account may now hold a plan.
       const seenChanges = generation();
-      const outgoing = { ...exportSync(getState(), device, nowDate()), erasedAt: null };
+      // Keep the account's erase marker: its other devices that missed the erase must still be
+      // asked, rather than merge their old plan back in. This device's plan never belonged to it.
+      const marker = latest?.payload?.erasedAt ?? null;
+      const outgoing = { ...exportSync(getState(), device, nowDate()), erasedAt: marker };
       const rev = await pushRpc(latest ? latest.rev : 0, outgoing);
       if (rev === null) {
         gate = { ...current, serverHasData: true };
@@ -321,6 +324,7 @@ export function createCloudSync({
       }
       rebind(current.uid);
       store.set(KEY.rev, rev);
+      store.set(KEY.eraseSeen, marker);
       store.set(KEY.dirty, generation() !== seenChanges);
       gate = null;
       await syncNow();

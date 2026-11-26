@@ -990,6 +990,22 @@ test('data that appears between the prompt and the upload choice turns it into t
   assert.equal(server.rpcLog.filter((call) => call.name === 'push_sync_doc').length, pushes);
 });
 
+test('upload into an account that holds only an erase marker keeps the marker for its other devices', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  const erasedAt = '2026-11-19T07:00:00.000Z';
+  const now = new Date(T0);
+  const empty = exportSync(clearSyncedData(b.state, now), 'dev-x', now);
+  server.rows.set('user-2', { payload: { ...empty, erasedAt }, rev: 3 });
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false, 'a marker counts as empty');
+  await b.engine.chooseLink('upload');
+  assert.equal(b.store.get('cloud.account'), 'user-2');
+  assert.equal(server.row('user-2').payload.erasedAt, erasedAt, 'the marker stays on the uploaded plan');
+  assert.equal(b.store.get('cloud.eraseSeen'), erasedAt, 'this device does not ask about that erase');
+  assert.ok(server.row('user-2').payload.data.tasks.length > 0);
+});
+
 test('upload pushes once against the revision it read, and a conflict leaves the device unbound with the replace prompt', async () => {
   const { server, b } = await pair();
   b.session.user = USER2;
