@@ -20,7 +20,7 @@ import {
   exactTiming, nativeReminders, openExactTimingSetting, permissionState, requestPermission,
   scheduleUpcoming, showNow
 } from './notify.js';
-import { calendarDays, movedBlock, rangeToBlock, resizedBlock, snap } from './calendar.js';
+import { calendarDays, rangeToBlock, resizedBlock, shiftBlockDays, snap } from './calendar.js';
 import { startOfDay } from '../extension/block-schedule.js';
 import { clearPhotos, deletePhoto, photoUrl, savePhoto } from './photos.js';
 import {
@@ -1448,8 +1448,24 @@ function calendarSpan() {
     : { start: calendarAnchor, count: 1 };
 }
 
+// Calendar times use the planning zone, like the block positions, in the current language.
+const calendarZone = () => state.settings?.timeZone || undefined;
+
+function calendarTime(iso) {
+  return new Intl.DateTimeFormat(locale(), { timeStyle: 'short', timeZone: calendarZone() }).format(new Date(iso));
+}
+
+function calendarDateTime(iso) {
+  return new Intl.DateTimeFormat(locale(), { dateStyle: 'medium', timeStyle: 'short', timeZone: calendarZone() }).format(new Date(iso));
+}
+
+function calendarRange(start, end) {
+  const key = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: calendarZone() }).format(new Date(iso));
+  return `${calendarDateTime(start)}–${key(start) === key(end) ? calendarTime(end) : calendarDateTime(end)}`;
+}
+
 function blockLabel(item) {
-  const range = formatRange(item.start, item.end);
+  const range = calendarRange(item.start, item.end);
   const tags = [item.strict ? t('calendar.strict') : null, item.pending ? t('calendar.pending') : null].filter(Boolean);
   return { range, tags, name: [`${item.title}, ${range}`, ...tags].join(', ') };
 }
@@ -1485,10 +1501,9 @@ function calendarBlock(item) {
   return node;
 }
 
-function renderCalendar() {
+function renderCalendar(force = false) {
   if (calendarDrag) return;
   const now = new Date();
-  const zone = state.settings?.timeZone ?? null;
   const { start, count } = calendarSpan();
   const days = calendarDays(state, start, count, now);
   const end = addDays(start, count - 1);
@@ -1497,6 +1512,20 @@ function renderCalendar() {
   element('calendar-week').setAttribute('aria-pressed', String(calendarMode === 'week'));
   element('calendar-help').hidden = calendarEditable;
   const grid = element('calendar-grid');
+  grid.classList.toggle('editable', calendarEditable);
+  const signature = {
+    start, count, mode: calendarMode, language: getLanguage(), zone: calendarZone(), today: planningDay(state, now),
+    tasks: state.tasks.filter((task) => task.status !== 'canceled')
+      .map((task) => [task.id, task.title, task.status, task.deadline, task.workBlocks]),
+    pending: state.pendingBlockChanges
+  };
+  if (force) sectionCache.delete('calendar');
+  if (cached('calendar', signature)) {
+    updateCalendarNow(now);
+    return;
+  }
+  const focused = document.activeElement?.closest?.('.cal-block');
+  const focusKey = focused ? { blockId: focused.dataset.blockId, day: focused.parentElement.dataset.day } : null;
   grid.style.setProperty('--days', String(count));
   const hours = h('div', { class: 'cal-hours', 'aria-hidden': 'true' },
     ...Array.from({ length: 24 }, (_, hour) => {
@@ -1510,14 +1539,12 @@ function renderCalendar() {
       ...day.blocks.map(calendarBlock),
       ...day.deadlines.map((item) => {
         const line = h('div', { class: 'cal-deadline' }, h('span', { text: t('calendar.due', { title: item.title }) }));
+        line.title = calendarTime(item.at);
         line.style.top = item.top * MINUTE_PX + 'px';
         return line;
       }));
     if (day.isToday) {
-      const minutes = (now.getTime() - startOfDay(day.day, zone)) / 60_000;
-      const line = h('div', { class: 'cal-now' });
-      line.style.top = minutes * MINUTE_PX + 'px';
-      column.append(line);
+      column.append(h('div', { class: 'cal-now', dataset: { day: day.day } }));
     }
     if (calendarEditable) {
       column.addEventListener('pointerdown', (event) => startCreateDrag(event, column, day.day));
@@ -1529,10 +1556,23 @@ function renderCalendar() {
     h('div', { class: 'cal-corner' }),
     ...days.map((day) => h('div', { class: `cal-head${day.isToday ? ' today' : ''}`, text: formatDay(day.day) })),
     hours, ...columns);
+  updateCalendarNow(now);
+  if (focusKey) {
+    const column = [...grid.querySelectorAll('.cal-day')].find((node) => node.dataset.day === focusKey.day);
+    [...(column?.querySelectorAll('.cal-block') ?? [])].find((node) => node.dataset.blockId === focusKey.blockId)?.focus();
+  }
   if (!calendarScrolled) {
     calendarScrolled = true;
     element('calendar-scroll').scrollTop = 7 * HOUR_PX;
   }
+}
+
+// Moves the "now" line without rebuilding the grid.
+function updateCalendarNow(now = new Date()) {
+  const line = element('calendar-grid').querySelector('.cal-now');
+  if (!line) return;
+  const minutes = (now.getTime() - startOfDay(line.dataset.day, state.settings?.timeZone ?? null)) / 60_000;
+  line.style.top = minutes * MINUTE_PX + 'px';
 }
 
 function dragEvent(event, type) {
@@ -1582,7 +1622,7 @@ function moveDrag(event) {
     drag.ghost ??= drag.column.appendChild(h('div', { class: 'cal-ghost' }));
     drag.ghost.style.top = (Date.parse(drag.range.start) - origin) / 60_000 * MINUTE_PX + 'px';
     drag.ghost.style.height = (Date.parse(drag.range.end) - Date.parse(drag.range.start)) / 60_000 * MINUTE_PX + 'px';
-    drag.ghost.textContent = formatRange(drag.range.start, drag.range.end);
+    drag.ghost.textContent = calendarRange(drag.range.start, drag.range.end);
     return;
   }
   const original = storedBlock(drag.item);
@@ -1593,13 +1633,13 @@ function moveDrag(event) {
   if (drag.kind === 'move') {
     drag.days = calendarMode === 'week' && drag.columnWidth ? Math.round((event.clientX - drag.x0) / drag.columnWidth) : 0;
     drag.node.style.transform = `translate(${drag.days * drag.columnWidth}px, ${drag.minutes * MINUTE_PX}px)`;
-    const preview = movedBlock(original, drag.minutes + drag.days * 1440);
-    time.textContent = formatRange(preview.start, preview.end);
+    const preview = shiftBlockDays(original, drag.days, drag.minutes, state.settings?.timeZone ?? null);
+    time.textContent = calendarRange(preview.start, preview.end);
   } else {
     const preview = resizedBlock(original, drag.minutes);
     const grown = (Date.parse(preview.end) - Date.parse(original.end)) / 60_000;
     drag.node.style.height = Math.max(drag.height + grown * MINUTE_PX, 14) + 'px';
-    time.textContent = formatRange(preview.start, preview.end);
+    time.textContent = calendarRange(preview.start, preview.end);
   }
 }
 
@@ -1607,7 +1647,7 @@ function cancelDrag() {
   const drag = calendarDrag;
   calendarDrag = null;
   drag?.ghost?.remove();
-  renderCalendar();
+  renderCalendar(true);
 }
 
 function finishDrag() {
@@ -1622,27 +1662,27 @@ function finishDrag() {
   }
   if (!drag.moved) {
     if (drag.kind === 'move') location.hash = '#task/' + encodeURIComponent(drag.item.taskId);
-    renderCalendar();
+    renderCalendar(true);
     return;
   }
   const task = state.tasks.find((item) => item.id === drag.item.taskId);
   const original = storedBlock(drag.item);
   if (!task || !original) {
-    renderCalendar();
+    renderCalendar(true);
     return;
   }
   const replacement = drag.kind === 'move'
-    ? movedBlock(original, drag.minutes + drag.days * 1440)
+    ? shiftBlockDays(original, drag.days, drag.minutes, state.settings?.timeZone ?? null)
     : resizedBlock(original, drag.minutes);
   const known = new Set((state.pendingBlockChanges ?? []).map((change) => change.id));
   const feedback = element('calendar-feedback');
   const workBlocks = task.workBlocks.map((block) => block.id === original.id ? replacement : block);
   if (!attempt(() => saveTask(state, task.id, { workBlocks }, ctx()), feedback, t('calendar.moved'))) {
-    renderCalendar();
+    renderCalendar(true);
     return;
   }
   const queued = (state.pendingBlockChanges ?? []).find((change) => change.blockId === original.id && !known.has(change.id));
-  if (queued) feedback.textContent = t('calendar.waiting', { time: formatTime(queued.effectiveAt) });
+  if (queued) feedback.textContent = t('calendar.waiting', { time: calendarDateTime(queued.effectiveAt) });
 }
 
 function openCalendarDialog(range) {
@@ -1654,7 +1694,7 @@ function openCalendarDialog(range) {
   element('calendar-create').hidden = tasks.length === 0;
   element('calendar-task').replaceChildren(...tasks.map((task) => h('option', { value: task.id, text: task.title })));
   element('calendar-form').elements.strict.checked = false;
-  element('calendar-range-text').textContent = formatRange(range.start, range.end);
+  element('calendar-range-text').textContent = calendarRange(range.start, range.end);
   element('calendar-dialog').showModal();
 }
 
@@ -2098,7 +2138,7 @@ async function boot() {
     if (planningDay(state) !== currentDay) render();
     else renderTimer();
     if (tick % 15 === 0) checkReminders();
-    if (tick % 60 === 0 && currentView === 'calendar') renderCalendar();
+    if (tick % 60 === 0 && currentView === 'calendar') updateCalendarNow();
     if (tick % 30 === 0) pullChromeReports().catch(reportError);
   }, 1000);
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startOfDay } from '../extension/block-schedule.js';
 import {
-  calendarDays, movedBlock, rangeToBlock, resizedBlock, snap, SNAP_MINUTES
+  calendarDays, movedBlock, rangeToBlock, resizedBlock, shiftBlockDays, snap, SNAP_MINUTES
 } from '../app/calendar.js';
 
 const ZONE = 'Asia/Ho_Chi_Minh';
@@ -101,4 +101,29 @@ test('snap, movedBlock, resizedBlock and rangeToBlock', () => {
   const tiny = rangeToBlock('2026-03-10', 601, 603, ZONE);
   assert.equal(Date.parse(tiny.end) - Date.parse(tiny.start), 15 * 60_000);
   assert.equal(tiny.start, at('2026-03-10', '10:00'));
+});
+
+test('moving a block to another day keeps its local time across a clock change', () => {
+  const zone = 'America/New_York';
+  const block = { id: 'b', strict: false, start: at('2026-03-07', '10:00', zone), end: at('2026-03-07', '11:30', zone) };
+  const moved = shiftBlockDays(block, 1, 0, zone);
+  // 'at' adds elapsed minutes, so it is only right before the clocks change; use UTC literals.
+  assert.equal(moved.end, '2026-03-08T15:30:00.000Z');
+  assert.equal(moved.start, '2026-03-08T14:00:00.000Z');
+  assert.equal(shiftBlockDays(block, 1, 62, zone).start, '2026-03-08T15:00:00.000Z');
+  assert.equal(shiftBlockDays(block, 0, 60, zone).start, at('2026-03-07', '11:00', zone));
+  const back = shiftBlockDays({ ...block, start: moved.start, end: moved.end }, -1, 0, zone);
+  assert.equal(back.start, block.start);
+});
+
+test('rangeToBlock stays inside a 23 hour day and never starts before midnight', () => {
+  const zone = 'America/New_York';
+  const range = rangeToBlock('2026-03-08', 1300, 2000, zone);
+  assert.equal(range.end, new Date(startOfDay('2026-03-09', zone)).toISOString());
+  assert.equal(Date.parse(range.end) - Date.parse(range.start), 75 * 60_000);
+  const early = rangeToBlock('2026-03-08', -90, 20, zone);
+  assert.equal(early.start, new Date(startOfDay('2026-03-08', zone)).toISOString());
+  const late = rangeToBlock('2026-03-08', 1500, 1600, zone);
+  assert.equal(late.end, new Date(startOfDay('2026-03-09', zone)).toISOString());
+  assert.equal(Date.parse(late.end) - Date.parse(late.start), 15 * 60_000);
 });

@@ -1,6 +1,6 @@
 // Calendar layout for work blocks (PLAN-01, PLAN-02). Pure functions, no DOM.
 // Times are ISO strings; positions are minutes from the start of a planning day.
-import { startOfDay } from '../extension/block-schedule.js';
+import { localDayParts, startOfDay } from '../extension/block-schedule.js';
 import { addDays, localDate } from './model.js';
 
 export const SNAP_MINUTES = 15;
@@ -18,18 +18,37 @@ export function movedBlock(block, deltaMinutes) {
   return { ...block, start: shifted(block.start, delta), end: shifted(block.end, delta) };
 }
 
+// Moves a block by whole days and a vertical delta, keeping its wall-clock time in the
+// planning zone across clock changes. The length stays the same.
+export function shiftBlockDays(block, days, deltaMinutes, timeZone) {
+  if (!days) return movedBlock(block, deltaMinutes);
+  const start = Date.parse(block.start);
+  const original = localDayParts(new Date(start), timeZone);
+  const wanted = Math.floor(original.minutes) + snap(deltaMinutes);
+  let target = startOfDay(addDays(original.day, days), timeZone) + wanted * MINUTE_MS;
+  const expected = ((wanted % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+  let off = expected - Math.floor(localDayParts(new Date(target), timeZone).minutes);
+  if (off > 720) off -= DAY_MINUTES;
+  if (off < -720) off += DAY_MINUTES;
+  target += off * MINUTE_MS;
+  return { ...block, start: new Date(target).toISOString(), end: new Date(target + Date.parse(block.end) - start).toISOString() };
+}
+
 export function resizedBlock(block, deltaMinutes) {
   const earliest = Date.parse(block.start) + SNAP_MINUTES * MINUTE_MS;
   const end = Math.max(earliest, Date.parse(block.end) + snap(deltaMinutes) * MINUTE_MS);
   return { ...block, end: new Date(end).toISOString() };
 }
 
+// The length of a calendar day in minutes: 1380 or 1500 when the clocks change.
+const dayLength = (day, timeZone) => Math.round((startOfDay(addDays(day, 1), timeZone) - startOfDay(day, timeZone)) / MINUTE_MS);
+
 export function rangeToBlock(day, fromMinutes, toMinutes, timeZone) {
-  let from = snap(Math.min(fromMinutes, toMinutes));
-  let to = snap(Math.max(fromMinutes, toMinutes));
-  if (to - from < SNAP_MINUTES) to = from + SNAP_MINUTES;
-  if (to > DAY_MINUTES) {
-    to = DAY_MINUTES;
+  const length = dayLength(day, timeZone);
+  let from = Math.max(0, snap(Math.min(fromMinutes, toMinutes)));
+  let to = Math.min(length, snap(Math.max(fromMinutes, toMinutes)));
+  if (to - from < SNAP_MINUTES) {
+    to = Math.min(length, from + SNAP_MINUTES);
     from = Math.min(from, to - SNAP_MINUTES);
   }
   const origin = startOfDay(day, timeZone);
