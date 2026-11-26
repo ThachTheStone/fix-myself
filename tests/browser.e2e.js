@@ -56,7 +56,7 @@ function localDay(date) {
   return localInput(date).slice(0, 10);
 }
 
-test('tasks move from the inbox to a commitment, keep their deadline when blocks move, and sync to another profile', { timeout: 60_000 }, async (t) => {
+test('tasks leave the inbox when they get a deadline, keep their deadline when blocks move, and sync to another profile', { timeout: 60_000 }, async (t) => {
   const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
   t.after(() => app.httpServer.close());
   const url = `http://127.0.0.1:${app.httpServer.address().port}`;
@@ -81,10 +81,6 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Saved.').waitFor();
 
-  await page.getByLabel('Outcome you commit to deliver').fill('Proposal sent');
-  await page.getByRole('button', { name: 'Commit', exact: true }).click();
-  await page.getByText('Proposal sent', { exact: true }).waitFor();
-
   const blockStart = new Date(deadline.getTime() - 86_400_000);
   blockStart.setHours(9, 0, 0, 0);
   await detail.getByLabel('Start', { exact: true }).fill(localInput(blockStart));
@@ -98,7 +94,6 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   await page.getByText('Work block rescheduled. The deadline is unchanged.').waitFor();
   assert.equal(await detail.getByLabel('Deadline', { exact: true }).inputValue(), localInput(deadline));
   await page.locator('#timeline-list').getByText('Work block moved from', { exact: false }).waitFor();
-  await page.locator('#timeline-list').getByText('Committed to “Proposal sent”', { exact: false }).waitFor();
 
   await page.getByRole('link', { name: '← All tasks' }).click();
   await page.locator('#inbox-empty').waitFor();
@@ -116,7 +111,7 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   await page.locator('#next-title').getByText('Prepare the proposal').waitFor();
 
   await page.getByRole('link', { name: 'Review' }).click();
-  await page.locator('#review-stats').getByText('Commitments due').waitFor();
+  await page.locator('#review-stats').getByText('Tasks due').waitFor();
 
   await page.getByRole('link', { name: 'Settings' }).click();
   const [download] = await Promise.all([

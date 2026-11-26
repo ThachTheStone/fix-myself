@@ -1,6 +1,6 @@
 # Fix Myself
 
-A local-first planner and focus timer for Windows 11 and Android. Set a mission, capture tasks into an inbox, commit to outcomes, schedule work blocks around deadlines, get reminders, and bring your next action into view when a focus session blocks a site in Chrome. A weekly review shows delivered commitments and workouts. See the [software requirements](SRS.md) for the full product scope.
+A local-first planner and focus timer for Windows 11 and Android. Set a mission, capture tasks into an inbox, define completion criteria, schedule work blocks around deadlines, get reminders, and bring your next action into view when a focus session blocks a site in Chrome. A weekly review shows delivered tasks and workouts. See the [software requirements](SRS.md) for the full product scope.
 
 ## Project context
 

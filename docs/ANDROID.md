@@ -33,7 +33,7 @@ Quyết định ngày 2026-11-25: Windows là nơi lập kế hoạch và làm v
 
 1. **Chạy được bản hiện tại trên máy thật.** Cài Android Studio với Android 36 SDK, Platform-Tools và JDK 21. Bật Gỡ lỗi USB, kiểm tra `adb devices`, rồi chạy `npm run android:open` và bấm **Run**. Kiểm tra nhắc nhở khi app đóng và quyền **Allow exact timing**.
 2. **Đồng bộ Supabase.** Sau khi có, điện thoại tự nhận task, work block và thời gian focus từ Windows.
-3. **Dashboard và lịch chỉ xem.** Màn hình đầu trên điện thoại là dashboard: thời gian focus hôm nay và tuần này theo task, wandering, commitment sắp tới hạn. Lịch hiển thị cùng dữ liệu với Windows nhưng không cho kéo thả.
+3. **Dashboard và lịch chỉ xem.** Màn hình đầu trên điện thoại là dashboard: thời gian focus hôm nay và tuần này theo task, wandering, task sắp tới hạn. Lịch hiển thị cùng dữ liệu với Windows nhưng không cho kéo thả.
 4. **Đo usage.** Plugin Kotlin đọc `UsageStatsManager` sau khi người dùng cấp quyền **Usage access**. Chỉ đồng bộ tổng theo ngày (SYS-04). Hiển thị chỗ thiếu dữ liệu khi quyền bị thu hồi (A-09).
 5. **Chặn lướt điện thoại.** Thử trên máy POCO theo A-03. Phát hiện app phía trước bằng Usage access hoặc Accessibility service, rồi hiện màn can thiệp bằng một activity của app. Không chặn trình gọi điện, chức năng khẩn cấp và Cài đặt hệ thống (FOC-07). Nếu không đạt thì chuyển sang chế độ **Alerts only** (FOC-08).
 

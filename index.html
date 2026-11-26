@@ -112,14 +112,14 @@
         <p id="capture-feedback" class="feedback" role="status"></p>
       </form>
       <section class="tasks-section" aria-labelledby="inbox-label">
-        <div class="section-heading"><div><h2 id="inbox-label" data-i18n="tasks.inbox">Inbox</h2><p class="muted" data-i18n="tasks.inboxHelp">Captured tasks you have not planned or committed to yet.</p></div></div>
+        <div class="section-heading"><div><h2 id="inbox-label" data-i18n="tasks.inbox">Inbox</h2><p class="muted" data-i18n="tasks.inboxHelp">Captured tasks stay here until they have a deadline, a planned day, a work block or a priority.</p></div></div>
         <ul id="inbox-list" class="task-list"></ul>
         <p class="empty panel" id="inbox-empty" hidden data-i18n="tasks.inboxEmpty">Your inbox is clear.</p>
       </section>
       <section class="tasks-section" aria-labelledby="planned-label">
-        <div class="section-heading"><h2 id="planned-label" data-i18n="tasks.planned">Planned and committed</h2></div>
+        <div class="section-heading"><h2 id="planned-label" data-i18n="tasks.planned">Planned</h2></div>
         <ul id="planned-list" class="task-list"></ul>
-        <p class="empty panel" id="planned-empty" hidden data-i18n="tasks.plannedEmpty">Plan a date, add a work block or commit to a task to see it here.</p>
+        <p class="empty panel" id="planned-empty" hidden data-i18n="tasks.plannedEmpty">Plan a date or add a work block to see it here.</p>
       </section>
       <details class="tasks-section">
         <summary><h2 class="inline-heading" data-i18n="tasks.closed">Completed and canceled</h2> <span id="closed-count" class="muted"></span></summary>
@@ -172,23 +172,6 @@
         </form>
 
         <div class="detail-side">
-          <section class="panel settings-panel" aria-labelledby="commit-label">
-            <h2 id="commit-label" data-i18n="detail.commitment">Commitment</h2>
-            <div id="commitment-view" hidden>
-              <p id="commitment-outcome" class="strong"></p>
-              <p id="commitment-time" class="muted"></p>
-              <button type="button" class="text-button" id="remove-commitment" data-i18n="detail.removeCommitment">Remove commitment</button>
-            </div>
-            <form id="commitment-form">
-              <label for="commit-outcome" data-i18n="detail.outcome">Outcome you commit to deliver</label>
-              <input id="commit-outcome" name="outcome" maxlength="240" required>
-              <label for="commit-time" data-i18n="detail.committedAt">Committed at</label>
-              <input id="commit-time" name="committedAt" type="datetime-local" required>
-              <button class="button primary" type="submit" data-i18n="detail.commit">Commit</button>
-            </form>
-            <p id="commitment-feedback" class="feedback" role="status"></p>
-          </section>
-
           <section class="panel settings-panel" aria-labelledby="children-label">
             <h2 id="children-label" data-i18n="tree.heading">Child tasks</h2>
             <p id="child-progress" class="muted"></p>
@@ -329,11 +312,6 @@
         <h2 id="missed-label" data-i18n="review.stillOpen">Still open</h2>
         <ul id="missed-list" class="task-list"></ul>
         <p class="muted" id="missed-empty" hidden data-i18n="review.stillOpenEmpty">Nothing due in this period is still open.</p>
-      </section>
-      <section class="tasks-section" aria-labelledby="undated-label">
-        <h2 id="undated-label" data-i18n="review.undated">Commitments without a deadline</h2>
-        <ul id="undated-list" class="task-list"></ul>
-        <p class="muted" id="undated-empty" hidden data-i18n="review.undatedEmpty">Every commitment has a deadline.</p>
       </section>
       <section class="tasks-section" aria-labelledby="distraction-label">
         <h2 id="distraction-label" data-i18n="review.distractions">Distractions</h2>

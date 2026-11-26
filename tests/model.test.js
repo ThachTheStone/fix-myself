@@ -112,8 +112,10 @@ test('quick capture lands in the inbox and priorities are limited to three', () 
   assert.equal(state.tasks[0].status, 'open');
   for (const title of ['One', 'Two', 'Three']) state = captureTask(state, { title, pinned: true }, c);
   assert.throws(() => captureTask(state, { title: 'Four', pinned: true }, c), /Unpin/);
-  state = saveTask(state, state.tasks[0].id, { commitment: { outcome: 'Idea written up', committedAt: c.now } }, c);
-  assert.equal(inboxTasks(state).length, 0);
+  state = saveTask(state, state.tasks[0].id, { deadline: '2026-11-21T17:00:00Z' }, c);
+  assert.equal(inboxTasks(state).length, 0, 'a deadline takes a task out of the inbox');
+  state = saveTask(state, state.tasks[0].id, { deadline: null }, c);
+  assert.deepEqual(inboxTasks(state).map((task) => task.title), ['Captured idea'], 'without a deadline it returns');
   assert.throws(() => saveTask(state, state.tasks[0].id, { status: 'paused' }, c));
 });
 
@@ -130,12 +132,11 @@ test('carryovers keep their deadline when added to today', () => {
   assert.equal(todayView(state, today.now).next.title, 'Draft report');
 });
 
-test('the timeline records commitments, rescheduled blocks, revised deadlines and reopening', () => {
+test('the timeline records rescheduled blocks, revised deadlines and reopening', () => {
   let state = fresh();
   const c = ctx('2026-11-19T08:00:00Z');
   state = captureTask(state, { title: 'Proposal', deadline: '2026-11-21T17:00:00Z' }, c);
   const id = state.tasks[0].id;
-  state = saveTask(state, id, { commitment: { outcome: 'Proposal sent', committedAt: c.now } }, c);
   state = saveTask(state, id, { workBlocks: [{ id: 'b1', start: '2026-11-21T09:00:00Z', end: '2026-11-21T11:00:00Z' }] }, c);
   state = saveTask(state, id, { workBlocks: [{ id: 'b1', start: '2026-11-20T09:00:00Z', end: '2026-11-20T11:00:00Z' }] }, c);
   assert.equal(state.tasks[0].deadline, '2026-11-21T17:00:00.000Z', 'moving a block keeps the deadline');
@@ -145,9 +146,13 @@ test('the timeline records commitments, rescheduled blocks, revised deadlines an
   const task = state.tasks[0];
   assert.equal(task.originalDeadline, '2026-11-21T17:00:00.000Z');
   assert.deepEqual(task.events.map((event) => event.type), [
-    'created', 'deadline_set', 'committed', 'block_scheduled', 'block_rescheduled',
+    'created', 'deadline_set', 'block_scheduled', 'block_rescheduled',
     'deadline_revised', 'completed', 'reopened'
   ]);
+  const old = { ...state, tasks: [{ ...task, events: [...task.events, { id: 'old', type: 'committed', at: '2026-11-19T08:00:00.000Z', outcome: 'Old' }] }] };
+  const kept = saveTask(old, id, { title: 'Proposal v2' }, c);
+  assert.equal(kept.tasks[0].events.some((event) => event.type === 'committed'), true, 'an old committed event stays');
+  assert.equal(kept.tasks[0].events.some((event) => event.type === 'commitment_removed'), false);
 });
 
 test('A-07: reminders follow their triggers and are canceled on completion', () => {
@@ -235,15 +240,14 @@ test('A-10: conflicting offline edits surface both values and deletions are not 
   assert.throws(() => mergeSync(pc, { format: 'other' }, ctx('2026-11-19T10:05:00Z', 'pc')));
 });
 
-test('REV-01: on-time rate counts commitments due in the period, excluding cancellations', () => {
+test('REV-01: on-time rate counts tasks with a deadline in the period, excluding cancellations', () => {
   let state = fresh();
   const c = ctx('2026-11-16T08:00:00Z');
-  const commit = { outcome: 'Delivered', committedAt: c.now };
-  state = captureTask(state, { title: 'On time', deadline: '2026-11-18T17:00:00Z', commitment: commit }, c);
-  state = captureTask(state, { title: 'Late', deadline: '2026-11-18T17:00:00Z', commitment: commit }, c);
-  state = captureTask(state, { title: 'Open', deadline: '2026-11-19T17:00:00Z', commitment: commit }, c);
-  state = captureTask(state, { title: 'Canceled', deadline: '2026-11-19T17:00:00Z', commitment: commit }, c);
-  state = captureTask(state, { title: 'Undated', commitment: commit }, c);
+  state = captureTask(state, { title: 'On time', deadline: '2026-11-18T17:00:00Z' }, c);
+  state = captureTask(state, { title: 'Late', deadline: '2026-11-18T17:00:00Z' }, c);
+  state = captureTask(state, { title: 'Open', deadline: '2026-11-19T17:00:00Z' }, c);
+  state = captureTask(state, { title: 'Canceled', deadline: '2026-11-19T17:00:00Z' }, c);
+  state = captureTask(state, { title: 'Undated' }, c);
   const [onTime, late, , canceled] = state.tasks.map((task) => task.id);
   state = toggleTask(state, onTime, ctx('2026-11-18T16:00:00Z'));
   state = toggleTask(state, late, ctx('2026-11-19T09:00:00Z'));
@@ -255,7 +259,7 @@ test('REV-01: on-time rate counts commitments due in the period, excluding cance
   assert.equal(review.completed.length, 2);
   assert.equal(review.onTime.length, 1);
   assert.equal(review.carryovers.length, 1);
-  assert.equal(review.undated.length, 1);
+  assert.equal('undated' in review, false);
   assert.equal(review.onTimeRate, 1 / 3);
   assert.equal(deliveryReview(state, '2026-12-01', '2026-12-07').onTimeRate, null);
 });
@@ -1652,4 +1656,93 @@ test('SRS 0.8: resolving a conflict that writes text criteria leaves the task fo
   assert.deepEqual(titles(resolved.tasks[0]), ['a', 'b']);
   assert.equal(resolved.tasks[0].criteria, '');
   assert.deepEqual(resolved.conflicts, []);
+});
+
+// Commitments are gone (SRS 0.9): an old outcome folds into the criteria checklist.
+const withCommitment = (extra, outcome = 'Proposal sent') => fold({ commitment: { outcome, committedAt: '2026-11-18T09:00:00.000Z' }, ...extra }, '');
+
+test('SRS 0.9: a commitment outcome becomes one criterion and the commitment is cleared', () => {
+  const task = withCommitment({ stamps: { commitment: '2026-11-01T00:00:00.000Z|pc' }, supersedes: { commitment: ['x'], title: ['z'] } });
+  const folded = foldTaskCriteria(task, foldCtx);
+  assert.deepEqual(titles(folded), ['Proposal sent']);
+  assert.equal(folded.subtasks[0].done, false);
+  assert.equal(folded.commitment, null);
+  assert.equal(folded.stamps.subtasks, '2026-11-19T09:00:00.000Z|pc');
+  assert.equal(folded.stamps.commitment, '2026-11-19T09:00:00.000Z|pc');
+  assert.deepEqual(folded.supersedes, { title: ['z'] });
+  assert.equal(folded.events, task.events, 'no timeline event');
+  assert.equal(foldTaskCriteria(folded, foldCtx), folded, 'fold twice is fold once');
+});
+
+test('SRS 0.9: the outcome follows text criteria, skips duplicates and ticks on a completed task', () => {
+  const dup = foldTaskCriteria({ ...withCommitment({}), criteria: 'proposal  sent' }, foldCtx);
+  assert.deepEqual(titles(dup), ['proposal  sent'], 'the outcome is not added twice');
+  const both = foldTaskCriteria({ ...withCommitment({ subtasks: [{ id: 's', title: 'First', done: false }] }), criteria: 'Second' }, foldCtx);
+  assert.deepEqual(titles(both), ['First', 'Second', 'Proposal sent']);
+  const done = foldTaskCriteria(withCommitment({ status: 'completed' }), foldCtx);
+  assert.equal(done.subtasks[0].done, true);
+  const cleared = foldTaskCriteria(withCommitment({}, ''), foldCtx);
+  assert.equal(cleared.commitment, null);
+  assert.deepEqual(cleared.subtasks, []);
+  assert.equal(cleared.stamps.commitment, '2026-11-19T09:00:00.000Z|pc');
+});
+
+test('SRS 0.9: a long outcome may split into two criteria and the cap of 50 drops the outcome', () => {
+  const long = Array.from({ length: 40 }, () => 'word').join(' ');
+  assert.equal(foldTaskCriteria(withCommitment({}, long), foldCtx).subtasks.length, 2);
+  const items = (n) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, title: `S${i}`, done: false }));
+  assert.equal(foldTaskCriteria(withCommitment({ subtasks: items(49) }), foldCtx).subtasks.length, 50);
+  const full = foldTaskCriteria(withCommitment({ subtasks: items(50) }), foldCtx);
+  assert.equal(full.subtasks.length, 50);
+  assert.equal(full.commitment, null);
+});
+
+test('SRS 0.9: two devices folding the same commitment converge without a conflict', () => {
+  const made = captureTask(fresh(), { title: 'Report' }, ctx('2026-11-19T08:00:00Z', 'a'));
+  const id = made.tasks[0].id;
+  const old = { ...made, tasks: [{ ...made.tasks[0], commitment: { outcome: 'Report filed', committedAt: '2026-11-18T09:00:00.000Z' } }] };
+  const a = foldAllCriteria(old, ctx('2026-11-19T09:00:00Z', 'a'));
+  const b = foldAllCriteria(structuredClone(old), ctx('2026-11-19T09:05:00Z', 'b'));
+  const intoA = mergeSync(a, exportOf(b, 'b', '2026-11-19T09:06:00Z'), ctx('2026-11-19T09:07:00Z', 'a'));
+  const intoB = mergeSync(b, exportOf(a, 'a', '2026-11-19T09:06:00Z'), ctx('2026-11-19T09:07:00Z', 'b'));
+  assert.deepEqual(intoA.state.conflicts, []);
+  assert.deepEqual(intoB.state.conflicts, []);
+  assert.deepEqual(titles(intoA.state.tasks.find((task) => task.id === id)), ['Report filed']);
+  assert.deepEqual(intoA.state.tasks[0].subtasks, intoB.state.tasks[0].subtasks);
+  const dataA = exportOf(intoA.state, 'a', '2026-11-19T10:00:00Z').data.tasks;
+  const again = mergeSync(intoA.state, exportOf(intoB.state, 'b', '2026-11-19T10:01:00Z'), ctx('2026-11-19T10:02:00Z', 'a')).state;
+  assert.deepEqual(exportOf(again, 'a', '2026-11-19T10:03:00Z').data.tasks, dataA, 'fixed point');
+});
+
+test('SRS 0.9: an older device sending a newer commitment after the fold adds its outcome once and raises no conflict', () => {
+  const made = captureTask(fresh(), { title: 'Report' }, ctx('2026-11-19T08:00:00Z', 'a'));
+  const id = made.tasks[0].id;
+  const seen = { seenUntil: '2026-11-19T08:30:00.000Z', name: 'peer', mergedAt: '2026-11-19T08:30:00.000Z' };
+  const oldTask = { ...made.tasks[0], commitment: { outcome: 'Report filed', committedAt: '2026-11-18T09:00:00.000Z' } };
+  const a = { ...foldAllCriteria({ ...made, tasks: [oldTask] }, ctx('2026-11-19T09:00:00Z', 'a')), peers: { b: seen } };
+  const remote = { ...made, tasks: [{ ...oldTask, commitment: { outcome: 'Report sent', committedAt: '2026-11-19T09:10:00.000Z' },
+    stamps: { ...oldTask.stamps, commitment: '2026-11-19T09:10:00.000Z|b' } }] };
+  const merged = mergeSync(a, exportOf(remote, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:12:00Z', 'a')).state;
+  assert.deepEqual(merged.conflicts, []);
+  const task = merged.tasks.find((item) => item.id === id);
+  assert.deepEqual(titles(task), ['Report filed', 'Report sent']);
+  assert.equal(task.commitment, null);
+  const again = mergeSync(merged, exportOf(remote, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:13:00Z', 'a')).state;
+  assert.deepEqual(titles(again.tasks.find((item) => item.id === id)), ['Report filed', 'Report sent'], 'no duplicate');
+});
+
+test('SRS 0.9: saveTask with a commitment appends its outcome as a criterion and keeps commitment null', () => {
+  let state = captureTask(fresh(), { title: 'Report', criteria: 'First' }, ctx(T0));
+  const id = state.tasks[0].id;
+  state = saveTask(state, id, { commitment: { outcome: 'x' } }, ctx(T0));
+  assert.deepEqual(titles(state.tasks[0]), ['First', 'x']);
+  assert.equal(state.tasks[0].commitment, null);
+  assert.equal(saveTask(state, id, { commitment: null }, ctx(T0)), state, 'null changes nothing');
+  assert.equal(saveTask(state, id, { commitment: { outcome: '   ' } }, ctx(T0)), state, 'a blank outcome is a no-op');
+  assert.equal(saveTask(state, id, { commitment: { outcome: 'X' } }, ctx(T0)), state, 'a duplicate is skipped');
+  const items = (n) => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, title: `S${i}`, done: false }));
+  const forty9 = saveTask(state, id, { subtasks: items(49) }, ctx(T0));
+  assert.equal(saveTask(forty9, id, { commitment: { outcome: 'last' } }, ctx(T0)).tasks[0].subtasks.length, 50);
+  const fifty = saveTask(state, id, { subtasks: items(50) }, ctx(T0));
+  assert.throws(() => saveTask(fifty, id, { commitment: { outcome: 'one more' } }, ctx(T0)), /Add up to 50 completion criteria/);
 });
