@@ -1731,6 +1731,25 @@ test('SRS 0.9: an older device sending a newer commitment after the fold adds it
   assert.deepEqual(titles(again.tasks.find((item) => item.id === id)), ['Report filed', 'Report sent'], 'no duplicate');
 });
 
+test('SRS 0.9: choosing the other device in a criteria conflict keeps the outcome folded in the same merge', () => {
+  const made = captureTask(fresh(), { title: 'Report', subtasks: [{ title: 'one' }] }, ctx('2026-11-19T08:00:00Z', 'a'));
+  const id = made.tasks[0].id;
+  const seen = { seenUntil: '2026-11-19T08:30:00.000Z', name: 'peer', mergedAt: '2026-11-19T08:30:00.000Z' };
+  const a = { ...saveTask(made, id, { subtasks: [...made.tasks[0].subtasks, { title: 'two' }] }, ctx('2026-11-19T09:00:00Z', 'a')),
+    peers: { b: seen } };
+  const base = made.tasks[0];
+  const remote = { ...made, tasks: [{ ...base,
+    subtasks: [...base.subtasks, { id: 'b1', title: 'bee', done: false }],
+    commitment: { outcome: 'OUTCOME', committedAt: '2026-11-19T09:10:00.000Z' },
+    stamps: { ...base.stamps, subtasks: '2026-11-19T09:10:00.000Z|b', commitment: '2026-11-19T09:10:00.000Z|b' } }] };
+  const merged = mergeSync(a, exportOf(remote, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:12:00Z', 'a')).state;
+  assert.deepEqual(merged.conflicts.map((conflict) => conflict.field), ['subtasks']);
+  assert.deepEqual(titles(merged.tasks[0]), ['one', 'two', 'OUTCOME']);
+  const chosen = resolveConflict(merged, merged.conflicts[0].id, 'remote', ctx('2026-11-19T09:13:00Z', 'a'));
+  assert.deepEqual(titles(chosen.tasks[0]), ['one', 'bee', 'OUTCOME']);
+  assert.equal(chosen.tasks[0].commitment, null);
+});
+
 test('SRS 0.9: saveTask with a commitment appends its outcome as a criterion and keeps commitment null', () => {
   let state = captureTask(fresh(), { title: 'Report', criteria: 'First' }, ctx(T0));
   const id = state.tasks[0].id;

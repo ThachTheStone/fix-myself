@@ -1814,6 +1814,17 @@ export function mergeSync(state, payload, ctx) {
   if (next.nextActionId && !next.tasks.some((task) => task.id === next.nextActionId && isActive(task))) {
     next.nextActionId = null;
   }
+  // A criteria list conflict must carry what this merge is about to fold (old text criteria or a
+  // commitment outcome), or choosing the other device's list would drop it: the fold clears them.
+  const unfolded = new Map(next.tasks.filter((task) => task.commitment != null || (task.criteria ?? '').trim())
+    .map((task) => [task.id, task]));
+  if (unfolded.size) {
+    next.conflicts = next.conflicts.map((conflict) => {
+      const task = conflict.field === 'subtasks' && unfolded.get(conflict.ref);
+      if (!task || !Array.isArray(conflict.remote)) return conflict;
+      return { ...conflict, remote: foldTaskCriteria({ ...task, subtasks: conflict.remote }, c).subtasks };
+    });
+  }
   next = reconcileReminders(foldAllCriteria(next, ctx), c.now);
   return { state: next, summary };
 }
