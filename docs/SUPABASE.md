@@ -19,16 +19,25 @@ Chrome và hoạt động app, vị trí đồng hồ nổi, mã ghép nối Chr
    → **Run**. Chạy lại không sao.
 3. **Authentication → Sign In / Providers → Email**: bật **Email**, giữ nguyên các tùy chọn khác. Tên các mục trong
    trang quản trị Supabase có thể khác đôi chút theo phiên bản.
-4. **Authentication → Emails → Magic Link** (mẫu email đăng nhập): thay nội dung bằng một dòng có mã, ví dụ
-   `Mã đăng nhập Fix Myself: {{ .Token }}`. Như vậy email gửi mã 6 số thay vì đường link, vì app desktop và Android
-   không mở link đăng nhập.
+4. **Authentication → Emails**: sửa **cả hai** mẫu **Magic Link** và **Confirm signup** thành một dòng có mã, ví dụ
+   `Mã đăng nhập Fix Myself: {{ .Token }}`. Lần đăng nhập đầu tiên của một email mới dùng mẫu Confirm signup, các lần
+   sau dùng Magic Link. App desktop và Android không mở link đăng nhập, nên email phải gửi mã. Độ dài mã (mặc định 6
+   số) nằm trong cài đặt Email OTP; app nhận mã từ 6 đến 10 số.
 5. **Project Settings → API**: chép **Project URL** và khóa **anon public** gửi cho agent (hoặc dán vào Settings của
    app khi tính năng có). Khóa anon được thiết kế để nằm trong app; quyền truy cập dữ liệu do Row Level Security giới hạn
    ở tài khoản của bạn. **Không** gửi khóa `service_role`.
+6. **Sau khi mọi thiết bị đã đăng nhập**: **Authentication → Sign In / Providers** → tắt **Allow new users to sign up**.
+   Khóa anon nằm trong file cài, nên nếu để mở, ai có file cài cũng tạo được tài khoản trong project của bạn. Họ không đọc
+   được dữ liệu của bạn, nhưng dùng được hạn mức email và dung lượng. Khi thêm thiết bị mới bằng một email đã có, không
+   cần mở lại.
 
 ## Giới hạn cần biết
 
 - Gói Free tạm dừng project sau khoảng một tuần không có truy cập. Khi đó app vẫn chạy và báo đồng bộ không khả dụng;
   mở lại project trong trang quản trị Supabase.
 - Gói Free giới hạn số email đăng nhập mỗi giờ. Mỗi thiết bị chỉ cần đăng nhập một lần.
-- Xóa dữ liệu trong Settings của app (SYS-05) sẽ xóa cả bản trên server.
+- Xóa dữ liệu trong Settings của app (SYS-05) thay bản trên server bằng một dấu "đã xóa". Mỗi máy khác sẽ hỏi bạn: xóa
+  luôn ở máy đó, hay đưa kế hoạch của máy đó lên lại.
+- Một máy đã có kế hoạch riêng, lần đầu đăng nhập vào tài khoản đã có dữ liệu, sẽ được thay bằng bản trên tài khoản.
+  Trước khi thay, app lưu một file đồng bộ của máy đó để bạn gộp lại thủ công nếu cần.
+- Trên Android, phiên đăng nhập nằm trong bộ nhớ của app, chưa dùng kho bảo vệ của hệ điều hành (giới hạn đã biết).

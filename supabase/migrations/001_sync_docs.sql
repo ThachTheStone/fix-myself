@@ -4,7 +4,7 @@
 
 create table if not exists public.sync_docs (
   user_id    uuid primary key references auth.users (id) on delete cascade,
-  payload    jsonb not null,               -- the fix-myself-sync payload
+  payload    jsonb not null,               -- the fix-myself-sync payload, or an erase marker
   rev        bigint not null default 1,    -- bumped on every write
   updated_at timestamptz not null default now(),
   constraint sync_docs_payload_size check (octet_length(payload::text) <= 5 * 1024 * 1024)
@@ -12,24 +12,26 @@ create table if not exists public.sync_docs (
 
 alter table public.sync_docs enable row level security;
 
+-- Supabase grants every privilege on new public tables by default. Keep only
+-- reads and deletes of the user's own row; writes go through push_sync_doc.
+revoke all on public.sync_docs from anon, authenticated;
+grant select, delete on public.sync_docs to authenticated;
+
 drop policy if exists sync_docs_own_select on public.sync_docs;
 create policy sync_docs_own_select on public.sync_docs
-  for select using (user_id = auth.uid());
+  for select to authenticated using (user_id = auth.uid());
 
 drop policy if exists sync_docs_own_delete on public.sync_docs;
 create policy sync_docs_own_delete on public.sync_docs
-  for delete using (user_id = auth.uid());
+  for delete to authenticated using (user_id = auth.uid());
 
--- Writes go only through push_sync_doc, so every write is a compare-and-swap
--- on rev: a device that read an older rev must merge again instead of
--- overwriting another device's changes.
-revoke insert, update on public.sync_docs from anon, authenticated;
-
+-- Every write is a compare-and-swap on rev: a device that read an older rev
+-- must merge again instead of overwriting another device's changes.
 create or replace function public.push_sync_doc(expected_rev bigint, new_payload jsonb)
 returns bigint
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
 declare
   me uuid := auth.uid();
@@ -56,7 +58,18 @@ $$;
 revoke all on function public.push_sync_doc(bigint, jsonb) from public, anon;
 grant execute on function public.push_sync_doc(bigint, jsonb) to authenticated;
 
--- Other devices learn about a write through Realtime.
+-- Server time, so the app can warn when a device clock is off (edit stamps use device clocks).
+create or replace function public.server_now()
+returns timestamptz
+language sql
+stable
+set search_path = ''
+as $$ select now() $$;
+
+revoke all on function public.server_now() from public, anon;
+grant execute on function public.server_now() to authenticated;
+
+-- Other devices learn about a write through Realtime (subscribe with a user_id filter).
 do $$
 begin
   if not exists (
