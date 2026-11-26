@@ -60,6 +60,7 @@ h2 { font-size: 1.35rem; letter-spacing: -.03em; }
 .tasks-section { margin-top: 31px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .muted { color: var(--muted); font-size: .9rem; }
+#review-criteria { white-space: pre-line; }
 .task-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .task {
   display: flex; align-items: center; gap: 12px; padding: 10px 14px;

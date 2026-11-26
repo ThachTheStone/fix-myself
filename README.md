@@ -47,11 +47,11 @@ Each paired profile reports back the days it was running and a daily count of bl
 
 ## Child tasks
 
-A task can have child tasks, up to 5 levels deep and 50 children per task. Open a task and use **Add child task**, or choose a **Parent task** to move it. The Tasks page shows children indented under their parent, with a button to collapse them. A parent can be completed or canceled only when everything beneath it is done, and reopening a child reopens its closed parents. A task page shows its parents, its children with their progress, and the focus time of the task and everything beneath it. A task with an open child task can be made strict without subtasks or criteria. If a sync leaves a parent missing or two devices move tasks into a loop, the app reads the broken link as top level and changes no data.
+A task can have child tasks, up to 5 levels deep and 50 children per task. Open a task and use **Add child task**, or choose a **Parent task** to move it. The Tasks page shows children indented under their parent, with a button to collapse them. A parent can be completed or canceled only when everything beneath it is done, and reopening a child reopens its closed parents. A task page shows its parents, its children with their progress, and the focus time of the task and everything beneath it. A task with an open child task can be made strict without completion criteria. If a sync leaves a parent missing or two devices move tasks into a loop, the app reads the broken link as top level and changes no data.
 
 ## Strict work blocks
 
-A work block can be marked **Strict** when the task has subtasks, completion criteria or an open child task. When it starts, Fix Myself holds a focus session on that task: no Pause, End session or task change. If the task is still open at the end, the hold extends in 15-minute steps up to twice the block's length. **Emergency exit** asks for a 2-minute wait and a reason. Removing strict, shortening or moving a block later waits for the change delay in Settings. The weekly review lists how each strict block ended.
+A work block can be marked **Strict** when the task has completion criteria or an open child task. When it starts, Fix Myself holds a focus session on that task: no Pause, End session or task change. If the task is still open at the end, the hold extends in 15-minute steps up to twice the block's length. **Emergency exit** asks for a 2-minute wait and a reason. Removing strict, shortening or moving a block later waits for the change delay in Settings. The weekly review lists how each strict block ended.
 
 ## Calendar
 

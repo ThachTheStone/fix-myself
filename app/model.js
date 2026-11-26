@@ -37,6 +37,7 @@ export const ALWAYS_ALLOWED_APPS = [
 ];
 
 // Fields that sync between devices. Each carries its own edit stamp.
+// `subtasks` holds the completion criteria checklist (SRS 0.8); the old text `criteria` is folded into it.
 export const TASK_FIELDS = [
   'title', 'status', 'pinned', 'supportsMission', 'nextStep', 'effortMinutes', 'criteria',
   'subtasks', 'workBlocks', 'plannedDate', 'deadline', 'commitment', 'remind', 'source', 'review', 'links', 'parentId'
@@ -123,6 +124,7 @@ function blankTask(c) {
     nextStep: '',
     effortMinutes: null,
     criteria: '',
+    // `subtasks` holds the completion criteria checklist (SRS 0.8); the old text `criteria` is folded into it.
     subtasks: [],
     workBlocks: [],
     plannedDate: null,
@@ -321,7 +323,8 @@ function validateChanges(task, changes) {
         next.nextStep = cleanText(value, 200, 'The next step');
         break;
       case 'criteria':
-        next.criteria = cleanText(value, 1000, 'Completion criteria');
+        // Folded into the checklist after the loop, so a `subtasks` change in the same save goes first.
+        cleanText(value, 1000, 'Completion criteria');
         break;
       case 'effortMinutes': {
         if (value === null || value === '' || value === undefined) {
@@ -343,10 +346,10 @@ function validateChanges(task, changes) {
         next.deadline = isoOrNull(value, 'Choose a valid deadline.');
         break;
       case 'subtasks':
-        if (!Array.isArray(value) || value.length > 50) throw new Error('Add up to 50 subtasks.');
+        if (!Array.isArray(value) || value.length > 50) throw new Error('Add up to 50 completion criteria.');
         next.subtasks = value.map((item) => {
-          const title = cleanText(item.title, 160, 'A subtask');
-          if (!title) throw new Error('Enter a subtask title.');
+          const title = cleanText(item.title, 160, 'A criterion');
+          if (!title) throw new Error('Enter a criterion.');
           return { id: item.id ?? newId(), title, done: Boolean(item.done) };
         });
         break;
@@ -412,7 +415,80 @@ function validateChanges(task, changes) {
         throw new Error(`Unknown task field: ${field}`);
     }
   }
+  if ('criteria' in changes) {
+    const list = next.subtasks ?? task.subtasks;
+    const added = criteriaItems(String(changes.criteria ?? ''), list, (next.status ?? task.status) === 'completed');
+    if (list.length + added.length > 50) throw new Error('Add up to 50 completion criteria.');
+    if (added.length > 0) next.subtasks = [...list, ...added];
+    next.criteria = '';
+  }
   return next;
+}
+
+const normalCriterion = (text) => text.trim().replace(/\s+/g, ' ').toLowerCase();
+
+function fnv1a(text) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+// Splits old free-text criteria into checklist items (SRS 0.8). Pure: returns only the new items.
+// Ids come from the text, so every device folding the same text gets the same ids.
+export function criteriaItems(text, existing = [], done = false) {
+  const titles = new Set(existing.map((item) => normalCriterion(item.title)));
+  const ids = new Set(existing.map((item) => item.id));
+  const out = [];
+  const pieces = [];
+  for (const raw of String(text ?? '').split(/\r\n|\r|\n/)) {
+    let line = raw.trim().replace(/^(?:[-*•+]\s*|\d+[.)]\s+)/, '').trim();
+    while (line.length > 160) {
+      const space = line.slice(0, 161).lastIndexOf(' ');
+      const cut = space > 0 ? space : 160;
+      pieces.push(line.slice(0, cut).trim());
+      line = line.slice(cut).trim();
+    }
+    if (line) pieces.push(line);
+  }
+  for (const title of pieces) {
+    if (!title) continue;
+    const key = normalCriterion(title);
+    if (titles.has(key)) continue;
+    titles.add(key);
+    const prefix = `crit-${fnv1a(key)}-`;
+    let n = 1;
+    while (ids.has(prefix + n)) n += 1;
+    ids.add(prefix + n);
+    out.push({ id: prefix + n, title, done: Boolean(done) });
+  }
+  return out;
+}
+
+// Moves old text criteria into the checklist as a real, stamped edit, so an older device's
+// later checklist edit conflicts or loses to it instead of silently dropping the items.
+export function foldTaskCriteria(task, c) {
+  if (!String(task.criteria ?? '').trim()) return task;
+  const subtasks = [...task.subtasks, ...criteriaItems(task.criteria, task.subtasks, task.status === 'completed')].slice(0, 50);
+  const stamp = stampOf(c);
+  const stamps = { ...task.stamps, subtasks: stamp, criteria: stamp };
+  const supersedes = { ...task.supersedes };
+  delete supersedes.subtasks;
+  delete supersedes.criteria;
+  return { ...task, subtasks, criteria: '', stamps, supersedes };
+}
+
+export function foldAllCriteria(state, ctx) {
+  const c = context(ctx);
+  let changed = false;
+  const tasks = state.tasks.map((task) => {
+    const folded = foldTaskCriteria(task, c);
+    if (folded !== task) changed = true;
+    return folded;
+  });
+  return changed ? { ...state, tasks } : state;
 }
 
 function event(c, type, detail = {}) {
@@ -551,9 +627,9 @@ export function nestedChildren(state, task) {
   return isActive(task) ? childrenOf(state, task.id) : [];
 }
 
-// A strict block needs subtasks, completion criteria or an active task in the subtree (WB-01).
+// A strict block needs completion criteria or an active task in the subtree (WB-01).
 export function strictEligible(state, task) {
-  return task.subtasks.length > 0 || Boolean(task.criteria) || hasActiveDescendant(state, task.id);
+  return task.subtasks.length > 0 || hasActiveDescendant(state, task.id);
 }
 
 // Taking task `id` out of its parent (move, cancel or delete) must not strip a strict block
@@ -570,8 +646,8 @@ function checkAncestorsNeedIt(state, id, newParent, nowMs) {
       const task = state.tasks.find((item) => item.id === other);
       return task && isActive(task);
     });
-    if (strictEligible(state, ancestor) && ancestor.subtasks.length === 0 && !ancestor.criteria && !stays) {
-      throw new Error('A strict block on its parent task needs it. Add subtasks or criteria to the parent first.');
+    if (strictEligible(state, ancestor) && ancestor.subtasks.length === 0 && !stays) {
+      throw new Error('A strict block on its parent task needs it. Add completion criteria to the parent first.');
     }
   }
 }
@@ -691,7 +767,7 @@ export function saveTask(state, id, changes, ctx) {
   }
   if (existing && after.status === 'completed' && before.status !== 'completed' && holdsTask
       && after.subtasks.some((subtask) => !subtask.done)) {
-    throw new Error('Tick every subtask before completing this task.');
+    throw new Error('Tick every completion criterion before completing this task.');
   }
   const parentChanged = existing ? storedParent(before) !== storedParent(after) : storedParent(after) !== null;
   if (parentChanged) checkParent(state, after, Boolean(existing));
@@ -714,11 +790,12 @@ export function saveTask(state, id, changes, ctx) {
   }
   let queued = null;
   if (ctx?.applyingPending !== true) {
-    // Removing an open subtask would let the task be completed without doing it.
+    // Removing an unticked criterion would let the task be completed without doing it. Renaming one stays allowed:
+    // it is no weaker than ticking it.
     if (existing && holdsTask) {
       const kept = new Set(after.subtasks.map((subtask) => subtask.id));
       if (before.subtasks.some((subtask) => !subtask.done && !kept.has(subtask.id))) {
-        throw new Error('Open subtasks cannot be removed during a strict block.');
+        throw new Error('Unticked criteria cannot be removed during a strict block.');
       }
     }
     // A new block may not reuse the id of a logged strict block or another task's block,
@@ -768,7 +845,7 @@ export function saveTask(state, id, changes, ctx) {
       const eligible = (task) => (existing ? strictEligible(state, task) : strictEligible({ ...state, tasks: [...state.tasks, task] }, task));
       const becameStrict = after.workBlocks.some((block) => isOpenStrict(block, nowMs) && !earlier.get(block.id)?.strict);
       if (!eligible(after) && (becameStrict || (existing && eligible(before)))) {
-        throw new Error('Add subtasks or completion criteria before making a block strict.');
+        throw new Error('Add completion criteria or a child task before making a block strict.');
       }
     }
   }
@@ -1716,7 +1793,7 @@ export function mergeSync(state, payload, ctx) {
   if (next.nextActionId && !next.tasks.some((task) => task.id === next.nextActionId && isActive(task))) {
     next.nextActionId = null;
   }
-  next = reconcileReminders(next, c.now);
+  next = reconcileReminders(foldAllCriteria(next, ctx), c.now);
   return { state: next, summary };
 }
 
@@ -1743,7 +1820,7 @@ export function resolveConflict(state, conflictId, choice, ctx) {
     stamps: { ...task.stamps, [conflict.field]: stamp },
     supersedes: { ...task.supersedes, [conflict.field]: superseded }
   });
-  return reconcileReminders({ ...state, tasks, conflicts }, c.now);
+  return reconcileReminders(foldAllCriteria({ ...state, tasks, conflicts }, ctx), c.now);
 }
 
 const holdsSession = (state, now) => isFocused(state.focus, now) || Boolean(state.focus?.strict);

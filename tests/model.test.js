@@ -501,11 +501,11 @@ const tickedDone = [{ id: 's1', title: 'Draft', done: true }];
 
 test('WB-01: strict needs subtasks or criteria and an upcoming block', () => {
   assert.throws(() => captureTask(fresh(), { title: 'x', workBlocks: [BLOCK] }, ctx(T0)),
-    /Add subtasks or completion criteria/);
+    /Add completion criteria or a child task/);
   const ok = captureTask(fresh(), { title: 'x', criteria: 'Done when sent', workBlocks: [BLOCK] }, ctx(T0));
   assert.equal(ok.tasks[0].workBlocks[0].strict, true);
   const { state, id } = strictTask();
-  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add completion criteria or a child task/);
   assert.throws(() => captureTask(fresh(), { title: 'x', criteria: 'c', workBlocks: [BLOCK] }, ctx('2026-11-19T11:00:00Z')),
     /Only upcoming work blocks can be strict/);
   const plain = captureTask(fresh(), { title: 'y', criteria: 'c', workBlocks: [{ ...BLOCK, strict: false }] }, ctx(T0));
@@ -632,11 +632,11 @@ test('WB-02: completing during the hold needs every subtask and logs on_time', (
   const { state, id } = strictTask();
   const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
   assert.throws(() => saveTask(held, id, { status: 'completed' }, ctx('2026-11-19T10:10:00Z')),
-    /Tick every subtask/);
-  // Deleting the open subtask (criteria would still satisfy WB-01) must not open a way out.
+    /Tick every completion criterion/);
+  // Text criteria fold into the checklist; deleting the unticked items must not open a way out.
   const withCriteria = saveTask(held, id, { criteria: 'Sent' }, ctx('2026-11-19T10:05:00Z'));
   assert.throws(() => saveTask(withCriteria, id, { subtasks: [] }, ctx('2026-11-19T10:06:00Z')),
-    /Open subtasks cannot be removed/);
+    /Unticked criteria cannot be removed/);
   const added = saveTask(held, id, { subtasks: [...held.tasks[0].subtasks, { id: 's2', title: 'Check', done: false }] },
     ctx('2026-11-19T10:06:00Z'));
   assert.equal(added.tasks[0].subtasks.length, 2);
@@ -1231,11 +1231,11 @@ test('TASK-05: the next action descends to a leaf of a pinned parent and an expl
 test('WB-01: an active child task makes a block eligible for strict', () => {
   const made = captureTask(fresh(), { title: 'Plain' }, ctx(T0));
   const id = made.tasks[0].id;
-  assert.throws(() => saveTask(made, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => saveTask(made, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add completion criteria or a child task/);
   const withChild = addChildTask(made, id, { title: 'Step' }, ctx(T0));
   assert.equal(saveTask(withChild, id, { workBlocks: [BLOCK] }, ctx(T0)).tasks[0].workBlocks[0].strict, true);
   const done = toggleTask(withChild, byTitle(withChild, 'Step').id, ctx(T0));
-  assert.throws(() => saveTask(done, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => saveTask(done, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add completion criteria or a child task/);
 });
 
 // A parent made strict only because it has one open child.
@@ -1255,7 +1255,7 @@ test('WB-01: a strict parent whose last child was completed can still be edited 
   assert.equal(toggleTask(done, parent, ctx(T0)).tasks[0].status, 'completed');
   // Making a block strict on an ineligible task still throws.
   const second = { id: 'blk2', start: '2026-11-19T12:00:00.000Z', end: '2026-11-19T12:30:00.000Z', strict: true };
-  assert.throws(() => saveTask(done, parent, { workBlocks: [BLOCK, second] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => saveTask(done, parent, { workBlocks: [BLOCK, second] }, ctx(T0)), /Add completion criteria or a child task/);
 });
 
 test('WB-01: the same holds during a live hold and the hold logs on_time', () => {
@@ -1287,7 +1287,7 @@ test('WB-01: before the block starts, taking the only child away from a strict p
 
 test('WB-01: removing the last subtask of a strict task with no children still throws', () => {
   const { state, id } = strictTask();
-  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add subtasks or completion criteria/);
+  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add completion criteria or a child task/);
 });
 
 test('TASK-03: an active child of a closed parent is not nested under it', () => {
@@ -1446,4 +1446,200 @@ test('SYS-05: a plain erase refuses during a focus session or strict hold', () =
   assert.doesNotThrow(() => eraseUserData(running, at(T).getTime() + 24 * 3_600_000));
   const held = { ...idle, focus: { sessionId: 's', taskId: null, endAt: 1, blockUntil: 1, endedAt: 1, strict: { blockId: 'b', taskId: 't' } } };
   assert.throws(() => eraseUserData(held, at(T).getTime()), /Erase after the focus session ends\./);
+});
+// ---------------------------------------------------------------------------
+// Completion criteria checklist (TASK-01, WB-01, REV-02, SRS 0.8)
+import { criteriaItems, foldAllCriteria, foldTaskCriteria, strictEligible } from '../app/model.js';
+
+const titles = (task) => task.subtasks.map((item) => item.title);
+const fold = (task, text) => ({ id: 't', status: 'open', subtasks: [], stamps: {}, supersedes: {}, events: [], ...task, criteria: text });
+const foldCtx = { at: '2026-11-19T09:00:00.000Z', device: 'pc' };
+
+test('SRS 0.8: criteriaItems splits lines, strips bullets and drops blanks', () => {
+  const items = criteriaItems('- Draft sent\n\n* Reviewed  \n• Filed\n1. First\n2) Second\n   \n+ Plus', [], false);
+  assert.deepEqual(items.map((item) => item.title), ['Draft sent', 'Reviewed', 'Filed', 'First', 'Second', 'Plus']);
+  assert.ok(items.every((item) => item.done === false && /^crit-[0-9a-f]{8}-1$/.test(item.id)));
+});
+
+test('SRS 0.8: a long line splits at spaces and never past 160 characters', () => {
+  const words = Array.from({ length: 80 }, (_, i) => `w${i}`).join(' ');
+  const long = `${words} ${words} ${words}`.slice(0, 400);
+  const items = criteriaItems(long, [], false);
+  assert.ok(items.length >= 3);
+  assert.ok(items.every((item) => item.title.length <= 160 && item.title === item.title.trim()));
+  assert.equal(items.map((item) => item.title).join(' '), long.replace(/\s+/g, ' ').trim());
+  const solid = criteriaItems('a'.repeat(160) + 'b'.repeat(160) + 'c'.repeat(80), [], false);
+  assert.deepEqual(solid.map((item) => item.title.length), [160, 160, 80]);
+});
+
+test('SRS 0.8: duplicate lines differing in case or spacing give one item, and existing titles are skipped', () => {
+  const items = criteriaItems('Send report\nsend   REPORT\n  Send report ', [], false);
+  assert.equal(items.length, 1);
+  const more = criteriaItems('Send report\nNew one', [{ id: 'a', title: 'send report', done: true }], false);
+  assert.deepEqual(more.map((item) => item.title), ['New one']);
+});
+
+test('SRS 0.8: the same text gives the same ids on copies, and a reused id gets the next occurrence number', () => {
+  assert.deepEqual(criteriaItems('a\nb', [], false), criteriaItems('a\nb', [], false));
+  const [first] = criteriaItems('x', [], false);
+  const renamed = [{ ...first, title: 'x renamed' }];
+  const [again] = criteriaItems('x', renamed, false);
+  assert.notEqual(again.id, first.id);
+  assert.match(again.id, /-2$/);
+  const ids = [...renamed, again].map((item) => item.id);
+  assert.equal(new Set(ids).size, ids.length);
+});
+
+test('SRS 0.8: foldTaskCriteria appends after existing items, marks completed tasks done and folds once', () => {
+  const task = fold({ subtasks: [{ id: 's1', title: 'Old', done: false }], status: 'completed' }, 'New\nOld');
+  const folded = foldTaskCriteria(task, foldCtx);
+  assert.deepEqual(titles(folded), ['Old', 'New']);
+  assert.equal(folded.subtasks[1].done, true);
+  assert.equal(folded.criteria, '');
+  assert.equal(foldTaskCriteria(folded, foldCtx), folded, 'fold twice is fold once');
+  const open = foldTaskCriteria(fold({}, 'a'), foldCtx);
+  assert.equal(open.subtasks[0].done, false);
+});
+
+test('SRS 0.8: empty criteria return the same object and overflow past 50 is dropped', () => {
+  const blank = fold({}, '  \n ');
+  assert.equal(foldTaskCriteria(blank, foldCtx), blank);
+  const many = fold({ subtasks: Array.from({ length: 48 }, (_, i) => ({ id: `s${i}`, title: `S${i}`, done: false })) }, 'a\nb\nc\nd');
+  assert.equal(foldTaskCriteria(many, foldCtx).subtasks.length, 50);
+});
+
+test('SRS 0.8: the fold is a stamped edit with no timeline event', () => {
+  const task = fold({ stamps: { subtasks: '2026-11-01T00:00:00.000Z|pc', criteria: '2026-11-01T00:00:00.000Z|pc' },
+    supersedes: { subtasks: ['x'], criteria: ['y'], title: ['z'] } }, 'a');
+  const folded = foldTaskCriteria(task, foldCtx);
+  assert.equal(folded.stamps.subtasks, '2026-11-19T09:00:00.000Z|pc');
+  assert.equal(folded.stamps.criteria, '2026-11-19T09:00:00.000Z|pc');
+  assert.deepEqual(folded.supersedes, { title: ['z'] });
+  assert.equal(folded.events, task.events);
+  const state = { tasks: [task, fold({ id: 'u' }, '')] };
+  const all = foldAllCriteria(state, { now: at('2026-11-19T09:00:00Z'), device: 'pc' });
+  assert.equal(all.tasks[1], state.tasks[1]);
+  assert.equal(foldAllCriteria(all, { now: at('2026-11-19T09:00:00Z'), device: 'pc' }), all);
+});
+
+test('SRS 0.8: saveTask folds text criteria into the checklist', () => {
+  let state = captureTask(fresh(), { title: 'Report' }, ctx(T0));
+  const id = state.tasks[0].id;
+  state = saveTask(state, id, { criteria: 'a\nb' }, ctx(T0));
+  assert.deepEqual(titles(state.tasks[0]), ['a', 'b']);
+  assert.equal(state.tasks[0].criteria, '');
+  state = saveTask(state, id, { criteria: 'c' }, ctx(T0));
+  assert.deepEqual(titles(state.tasks[0]), ['a', 'b', 'c']);
+  const kept = saveTask(state, id, { subtasks: [{ title: 'only' }], criteria: 'd' }, ctx(T0));
+  assert.deepEqual(titles(kept.tasks[0]), ['only', 'd']);
+  assert.equal(saveTask(kept, id, { criteria: 'D' }, ctx(T0)), kept, 'a duplicate line is skipped without error');
+  const many = saveTask(state, id, { subtasks: Array.from({ length: 50 }, (_, i) => ({ title: `S${i}` })) }, ctx(T0));
+  assert.throws(() => saveTask(many, id, { criteria: 'one more' }, ctx(T0)), /Add up to 50 completion criteria/);
+});
+
+test('WB-01: a task whose only criteria came from folded text is strict-eligible; an empty checklist is not', () => {
+  const made = captureTask(fresh(), { title: 'x', criteria: 'Sent' }, ctx(T0));
+  assert.equal(strictEligible(made, made.tasks[0]), true);
+  const empty = captureTask(fresh(), { title: 'y' }, ctx(T0));
+  assert.equal(strictEligible(empty, empty.tasks[0]), false);
+});
+
+// Two devices share one task whose criteria are still old text.
+function oldTextPair(text) {
+  const made = captureTask(fresh(), { title: 'Report' }, ctx('2026-11-19T08:00:00Z', 'a'));
+  const id = made.tasks[0].id;
+  const old = { ...made, tasks: [{ ...made.tasks[0], criteria: text }] };
+  return { id, a: old, b: structuredClone(old) };
+}
+const exportOf = (state, device, time) => exportSync(state, { id: device, name: device }, at(time));
+
+test('SRS 0.8: two devices folding the same text independently merge without a conflict', () => {
+  const { id, a: a0, b: b0 } = oldTextPair('x\ny');
+  const a = foldAllCriteria(a0, ctx('2026-11-19T09:00:00Z', 'a'));
+  const b = foldAllCriteria(b0, ctx('2026-11-19T09:05:00Z', 'b'));
+  assert.deepEqual(a.tasks[0].subtasks, b.tasks[0].subtasks);
+  const intoA = mergeSync(a, exportOf(b, 'b', '2026-11-19T09:06:00Z'), ctx('2026-11-19T09:07:00Z', 'a'));
+  const intoB = mergeSync(b, exportOf(a, 'a', '2026-11-19T09:06:00Z'), ctx('2026-11-19T09:07:00Z', 'b'));
+  assert.deepEqual(intoA.state.conflicts, []);
+  assert.deepEqual(intoB.state.conflicts, []);
+  assert.deepEqual(titles(intoA.state.tasks[0]), ['x', 'y']);
+  assert.deepEqual(intoA.state.tasks[0].subtasks, intoB.state.tasks[0].subtasks);
+  assert.equal(intoA.state.tasks[0].stamps.subtasks, '2026-11-19T09:05:00.000Z|b', 'the higher stamp is kept');
+  assert.equal(intoA.state.tasks.find((task) => task.id === id).criteria, '');
+});
+
+test('SRS 0.8: an older device adding a criterion after merging the fold loses nothing', () => {
+  const { id, a: a0, b: b0 } = oldTextPair('x\ny');
+  const a = foldAllCriteria(a0, ctx('2026-11-19T09:00:00Z', 'a'));
+  let b = mergeSync(b0, exportOf(a, 'a', '2026-11-19T09:01:00Z'), ctx('2026-11-19T09:02:00Z', 'b')).state;
+  assert.deepEqual(titles(b.tasks[0]), ['x', 'y']);
+  b = saveTask(b, id, { subtasks: [...b.tasks[0].subtasks, { title: 'z' }] }, ctx('2026-11-19T09:10:00Z', 'b'));
+  const back = mergeSync(a, exportOf(b, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:12:00Z', 'a')).state;
+  assert.deepEqual(titles(back.tasks[0]), ['x', 'y', 'z']);
+});
+
+test('SRS 0.8: concurrent edits since the last merge raise a conflict instead of dropping the folded items', () => {
+  const { id, a: a0, b: b0 } = oldTextPair('x\ny');
+  const seen = { seenUntil: '2026-11-19T08:30:00.000Z', name: 'peer', mergedAt: '2026-11-19T08:30:00.000Z' };
+  const a = { ...foldAllCriteria(a0, ctx('2026-11-19T09:00:00Z', 'a')), peers: { b: seen } };
+  const b = { ...saveTask(b0, id, { subtasks: [{ title: 'z' }] }, ctx('2026-11-19T09:10:00Z', 'b')), peers: { a: seen } };
+  const merged = mergeSync(a, exportOf(b, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:12:00Z', 'a')).state;
+  assert.deepEqual(merged.conflicts.map((conflict) => conflict.field), ['subtasks']);
+  assert.deepEqual(titles(merged.tasks[0]), ['x', 'y'], 'the local list stays until the user chooses');
+  const chosen = resolveConflict(merged, merged.conflicts[0].id, 'local', ctx('2026-11-19T09:13:00Z', 'a'));
+  assert.deepEqual(titles(chosen.tasks[0]), ['x', 'y']);
+});
+
+test('SRS 0.8: repeated merges with no new edits reach a fixed point', () => {
+  const { id, a: a0, b: b0 } = oldTextPair('x\ny');
+  let a = foldAllCriteria(a0, ctx('2026-11-19T09:00:00Z', 'a'));
+  let b = saveTask(b0, id, { subtasks: [{ title: 'z' }] }, ctx('2026-11-19T09:10:00Z', 'b'));
+  for (let round = 0; round < 2; round += 1) {
+    const minute = 20 + round * 10;
+    a = mergeSync(a, exportOf(b, 'b', `2026-11-19T09:${minute}:00Z`), ctx(`2026-11-19T09:${minute + 1}:00Z`, 'a')).state;
+    b = mergeSync(b, exportOf(a, 'a', `2026-11-19T09:${minute + 2}:00Z`), ctx(`2026-11-19T09:${minute + 3}:00Z`, 'b')).state;
+  }
+  const dataA = exportOf(a, 'a', '2026-11-19T10:00:00Z').data.tasks;
+  const dataB = exportOf(b, 'b', '2026-11-19T10:00:00Z').data.tasks;
+  assert.deepEqual(dataA, dataB);
+  const again = mergeSync(a, exportOf(b, 'b', '2026-11-19T10:01:00Z'), ctx('2026-11-19T10:02:00Z', 'a')).state;
+  assert.deepEqual(exportOf(again, 'a', '2026-11-19T10:03:00Z').data.tasks, dataA);
+});
+
+test('SRS 0.8: an old device editing the text after a fold adds only the new line', () => {
+  const { id, a: a0, b: b0 } = oldTextPair('x\ny');
+  const a = foldAllCriteria(a0, ctx('2026-11-19T09:00:00Z', 'a'));
+  const edited = { ...b0, tasks: [{ ...b0.tasks[0], criteria: 'w\nx\ny',
+    stamps: { ...b0.tasks[0].stamps, criteria: '2026-11-19T09:10:00.000Z|b' } }] };
+  const merged = mergeSync(a, exportOf(edited, 'b', '2026-11-19T09:11:00Z'), ctx('2026-11-19T09:12:00Z', 'a')).state;
+  const task = merged.tasks.find((item) => item.id === id);
+  assert.deepEqual(titles(task), ['x', 'y', 'w']);
+  assert.equal(task.criteria, '');
+});
+
+test('WB-01: during a hold, a merge that would remove unticked criteria raises a conflict and completion still fails', () => {
+  const { state, id } = strictTask();
+  const held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const seen = { seenUntil: '2026-11-19T10:01:00.000Z', name: 'Phone', mergedAt: '2026-11-19T10:01:00.000Z' };
+  const local = saveTask({ ...held, peers: { phone: seen } }, id,
+    { subtasks: [...held.tasks[0].subtasks, { id: 's2', title: 'Check', done: false }] }, ctx('2026-11-19T10:05:00Z', 'pc'));
+  const payload = exportOf(held, 'phone', '2026-11-19T10:07:00Z');
+  payload.data.tasks[0].subtasks = [];
+  payload.data.tasks[0].stamps.subtasks = '2026-11-19T10:06:00.000Z|phone';
+  const merged = mergeSync(local, payload, ctx('2026-11-19T10:08:00Z', 'pc')).state;
+  assert.deepEqual(merged.conflicts.map((conflict) => conflict.field), ['subtasks']);
+  assert.deepEqual(merged.tasks[0].subtasks.map((item) => item.id), ['s1', 's2']);
+  assert.throws(() => saveTask(merged, id, { status: 'completed' }, ctx('2026-11-19T10:09:00Z')),
+    /Tick every completion criterion/);
+});
+
+test('SRS 0.8: resolving a conflict that writes text criteria leaves the task folded', () => {
+  const made = captureTask(fresh(), { title: 'Report' }, ctx(T0));
+  const id = made.tasks[0].id;
+  const state = { ...made, conflicts: [{ id: `${id}:criteria`, ref: id, field: 'criteria', local: '', remote: 'a\nb',
+    localStamp: '2026-11-19T09:00:00.000Z|pc', remoteStamp: '2026-11-19T09:01:00.000Z|phone' }] };
+  const resolved = resolveConflict(state, `${id}:criteria`, 'remote', ctx('2026-11-19T09:05:00Z'));
+  assert.deepEqual(titles(resolved.tasks[0]), ['a', 'b']);
+  assert.equal(resolved.tasks[0].criteria, '');
+  assert.deepEqual(resolved.conflicts, []);
 });
