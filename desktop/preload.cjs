@@ -25,5 +25,8 @@ contextBridge.exposeInMainWorld('fixMyselfDesktop', {
   workspacePrune: (taskIds) => ipcRenderer.invoke('desktop:workspace-prune', taskIds),
   workspaceOpen: (request) => ipcRenderer.invoke('desktop:workspace-open', request),
   workspaceApps: (taskId) => ipcRenderer.invoke('desktop:workspace-apps', taskId),
+  secretGet: (key) => ipcRenderer.invoke('desktop:secret-get', key),
+  secretSet: (key, value) => ipcRenderer.invoke('desktop:secret-set', key, value),
+  secretRemove: (key) => ipcRenderer.invoke('desktop:secret-remove', key),
   show: () => ipcRenderer.invoke('desktop:show')
 });
