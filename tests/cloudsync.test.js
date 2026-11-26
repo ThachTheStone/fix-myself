@@ -146,7 +146,7 @@ function makeStorage() {
 
 function makeDevice(server, id, options = {}) {
   const dev = {
-    id, name: `Device ${id}`, server, clock: { ms: T0 }, store: options.store ?? new Map(), statuses: [], backups: [], applied: [],
+    id, name: `Device ${id}`, server, clock: { ms: T0 }, store: options.store ?? new Map(), statuses: [], backups: [], backupSources: [], applied: [],
     session: { user: options.user ?? USER1 }, timers: makeTimers(), merge: options.merge, online: true
   };
   const base = readState(makeStorage());
@@ -166,7 +166,7 @@ function makeDevice(server, id, options = {}) {
     device: { id, name: dev.name },
     now: dev.now,
     onStatus: (status) => dev.statuses.push(status),
-    saveBackup: (payload) => { dev.backups.push(payload); },
+    saveBackup: (payload, source) => { dev.backups.push(payload); dev.backupSources.push(source); },
     timers: dev.timers,
     isOnline: () => dev.online,
     events: null,
@@ -988,4 +988,37 @@ test('data that appears between the prompt and the upload choice turns it into t
   assert.equal(b.last().serverHasData, true);
   assert.equal(b.store.get('cloud.account'), 'user-1', 'still not bound to the new account');
   assert.equal(server.rpcLog.filter((call) => call.name === 'push_sync_doc').length, pushes);
+});
+
+test('upload pushes once against the revision it read, and a conflict leaves the device unbound with the replace prompt', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().serverHasData, false);
+  server.nullPushes = 1;
+  const pushes = server.rpcLog.filter((call) => call.name === 'push_sync_doc').length;
+  await b.engine.chooseLink('upload');
+  const calls = server.rpcLog.filter((call) => call.name === 'push_sync_doc');
+  assert.equal(calls.length, pushes + 1, 'one push only');
+  assert.equal(calls.at(-1).args.expected_rev, 0);
+  assert.equal(b.last().status, 'account-changed');
+  assert.equal(b.last().serverHasData, true);
+  assert.equal(b.store.get('cloud.account'), 'user-1', 'not rebound after a conflict');
+});
+
+test('a backup records the account whose plan it holds, or null for an unbound device', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  await b.engine.start();
+  await b.engine.chooseLink('replace');
+  assert.deepEqual(b.backupSources, [{ uid: 'user-1' }]);
+  const server2 = makeServer();
+  const c = makeDevice(server2, 'dev-c');
+  c.edit((state, ctx) => captureTask(state, { title: 'Local only' }, ctx));
+  server2.rows.set('user-1', structuredClone((await pair()).server.row('user-1')));
+  await c.engine.start();
+  assert.equal(c.last().status, 'link-needed');
+  await c.engine.chooseLink('replace');
+  assert.deepEqual(c.backupSources, [{ uid: null }]);
 });

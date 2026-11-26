@@ -2,7 +2,7 @@
 // DOM: connection settings, the session storage choice, the Supabase client,
 // the engine's memory and the sequences main.js runs around the engine.
 import { createClient } from '@supabase/supabase-js';
-import { SYNCED_KEYS } from './model.js';
+import { mergeSync, PROTECTIONS_MESSAGE, protectionsActive, SYNCED_KEYS } from './model.js';
 
 export const CLOUD_KEY = 'fix-myself:cloud';
 export const ENGINE_PREFIX = 'fix-myself:cloud:';
@@ -180,10 +180,22 @@ export async function changeConnection({ client, engine, setStatus, auth, unsubs
 
 export const MAX_BACKUPS = 5;
 
-// Puts a new copy first and drops the oldest past MAX_BACKUPS.
-export function addBackup(list, payload, now, id) {
+// Puts a new copy first and drops the oldest past MAX_BACKUPS. source is { uid, email } of the
+// account whose plan this copy held, or null for a device that was not bound to an account.
+export function addBackup(list, payload, now, id, source = null) {
   const kept = Array.isArray(list) ? list : [];
-  return [{ id, savedAt: now.toISOString(), payload }, ...kept].slice(0, MAX_BACKUPS);
+  return [{ id, savedAt: now.toISOString(), payload, source }, ...kept].slice(0, MAX_BACKUPS);
+}
+
+// True when a copy from another account is about to be merged into this one.
+export const restoreNeedsConfirm = (item, boundUid) => Boolean(item?.source?.uid) && item.source.uid !== (boundUid ?? null);
+
+// Restoring merges the copy into the current plan. Like a replace or an erase, it waits while
+// block rules or strict blocks are active, because a copy can bring back a switched-off rule.
+// The copy was written by this device, so there are no conflicts: the newer stamp of each field wins.
+export function restoreBackup(state, payload, ctx) {
+  if (protectionsActive(state, ctx.now)) throw new Error(PROTECTIONS_MESSAGE);
+  return mergeSync(state, payload, { ...ctx, allowOwn: true });
 }
 
 // Erase flow after the user confirmed twice. A signed-in bound device erases the

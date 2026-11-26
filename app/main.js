@@ -28,6 +28,7 @@ import { clearPhotos, deletePhoto, photoUrl, savePhoto } from './photos.js';
 import { createCloudSync } from './cloud-sync.js';
 import {
   changeConnection, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput, readCloudConfig,
+  restoreBackup, restoreNeedsConfirm,
   saveCloudConfig, sessionStorageFor, shouldNoteChange, signOutSequence
 } from './cloud.js';
 import { deleteBackups, listBackups, saveBackup } from './cloud-backup.js';
@@ -2465,8 +2466,8 @@ function startCloud(config) {
       applyState(registerDevice(next, { ...device, platform: platformName() }), { fromSync: true });
     },
     onStatus: setCloudStatus,
-    saveBackup: async (payload) => {
-      await saveBackup(payload);
+    saveBackup: async (payload, source) => {
+      await saveBackup(payload, source?.uid ? { uid: source.uid, email: knownEmail(source.uid) } : null);
       await refreshBackups();
     }
   });
@@ -2474,6 +2475,7 @@ function startCloud(config) {
     engine,
     setStatus: setCloudStatus,
     onSession: (session) => {
+      if (session?.user?.id && session.user.email) rememberEmail(session.user.id, session.user.email);
       cloudUser = session?.user ? { email: session.user.email ?? '' } : null;
       renderCloud();
     }
@@ -2576,11 +2578,11 @@ function renderCloud() {
   skew.hidden = cloudSkew === null || !signedIn;
   skew.textContent = cloudSkew === null ? '' : t('cloud.clockSkew', { minutes: cloudSkew });
   element('cloud-backup').hidden = cloudBackups.length === 0;
-  if (!cached('cloud-backups', [cloudBackups.map((item) => item.id), getLanguage()])) {
+  if (!cached('cloud-backups', [cloudBackups.map((item) => [item.id, item.source?.email ?? null]), getLanguage()])) {
     element('cloud-backup-list').replaceChildren(...cloudBackups.map((item) => h('li', {},
-      h('p', { class: 'strong', text: formatTime(item.savedAt) }),
+      h('p', { class: 'strong', text: [formatTime(item.savedAt), item.source?.email].filter(Boolean).join(' · ') }),
       h('div', { class: 'task-actions' },
-        h('button', { type: 'button', class: 'text-button', text: t('cloud.restore'), onclick: () => restoreBackup(item) }),
+        h('button', { type: 'button', class: 'text-button', text: t('cloud.restore'), onclick: (event) => askRestore(event.currentTarget, item) }),
         h('button', { type: 'button', class: 'text-button', text: t('cloud.download'), onclick: () => downloadBackup(item) })))));
   }
   const prompt = element('cloud-prompt');
@@ -2593,6 +2595,24 @@ function renderCloud() {
   const blocked = configured && !signedIn && cloudBound();
   element('erase-data').disabled = blocked;
   element('erase-blocked').hidden = !blocked;
+}
+
+// The account emails this device has signed in with, so a backup can say whose plan it holds. Device-local.
+const EMAILS_KEY = 'fix-myself:cloud-emails';
+function knownEmail(uid) {
+  try {
+    return JSON.parse(localStorage.getItem(EMAILS_KEY))?.[uid] ?? null;
+  } catch {
+    return null;
+  }
+}
+function rememberEmail(uid, email) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EMAILS_KEY)) ?? {};
+    if (saved[uid] !== email) localStorage.setItem(EMAILS_KEY, JSON.stringify({ ...saved, [uid]: email }));
+  } catch {
+    localStorage.setItem(EMAILS_KEY, JSON.stringify({ [uid]: email }));
+  }
 }
 
 async function refreshBackups() {
@@ -2611,10 +2631,18 @@ function downloadBackup(item) {
 }
 
 // A merge, not a replace: the copy is folded into the current plan and the result uploads like any edit.
-function restoreBackup(item) {
+// A copy from another account asks a second time before it is merged into this one.
+function askRestore(button, item) {
   const feedback = element('cloud-feedback');
+  if (restoreNeedsConfirm(item, cloudStore.get('cloud.account')) && button.dataset.armed !== 'true') {
+    button.dataset.armed = 'true';
+    feedback.textContent = t('cloud.restoreConfirm', { email: item.source.email ?? t('cloud.anotherAccount') });
+    setTimeout(() => { button.dataset.armed = 'false'; }, 8000);
+    return;
+  }
+  button.dataset.armed = 'false';
   try {
-    applyState(mergeSync(state, item.payload, { ...ctx(), allowOwn: true }).state);
+    applyState(restoreBackup(state, item.payload, ctx()).state);
     feedback.textContent = t('cloud.restored');
   } catch (error) {
     feedback.textContent = translateError(error.message);

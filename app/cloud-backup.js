@@ -33,10 +33,10 @@ async function run(mode, operation) {
 }
 
 // Read and write in one transaction so two saves cannot lose each other.
-export const saveBackup = (payload) => run('readwrite', (store) => {
+export const saveBackup = (payload, source = null) => run('readwrite', (store) => {
   const read = store.get(KEY);
   read.onsuccess = () => {
-    store.put(addBackup(read.result, payload, new Date(), globalThis.crypto.randomUUID()), KEY);
+    store.put(addBackup(read.result, payload, new Date(), globalThis.crypto.randomUUID(), source), KEY);
   };
   return read;
 });

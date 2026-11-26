@@ -245,7 +245,7 @@ export function createCloudSync({
       }
       const gen = generation();
       try {
-        await saveBackup(exportSync(snapshot, device, nowDate()));
+        await saveBackup(exportSync(snapshot, device, nowDate()), { uid: getKey(KEY.account) ?? null });
       } catch (error) {
         emit('error', { code: 'backup', message: error?.message ?? 'The backup could not be saved.' });
         return false;
@@ -309,10 +309,19 @@ export function createCloudSync({
         emit('account-changed', { email: current.email, serverHasData: true, localHasData: hasPlanData(getState()) });
         return;
       }
+      // One push against the revision just read. Bind only after it succeeded: a conflict means
+      // another device wrote first, and this account may now hold a plan.
+      const seenChanges = generation();
+      const outgoing = { ...exportSync(getState(), device, nowDate()), erasedAt: null };
+      const rev = await pushRpc(latest ? latest.rev : 0, outgoing);
+      if (rev === null) {
+        gate = { ...current, serverHasData: true };
+        emit('account-changed', { email: current.email, serverHasData: true, localHasData: hasPlanData(getState()) });
+        return;
+      }
       rebind(current.uid);
-      if (latest) store.set(KEY.eraseSeen, latest.payload.erasedAt);
-      store.set(KEY.dirty, true);
-      store.set(KEY.changeGen, generation() + 1);
+      store.set(KEY.rev, rev);
+      store.set(KEY.dirty, generation() !== seenChanges);
       gate = null;
       await syncNow();
       return;

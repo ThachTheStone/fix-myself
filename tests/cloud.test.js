@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  addBackup, changeConnection, CLOUD_KEY, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput,
+  addBackup, restoreBackup, restoreNeedsConfirm, changeConnection, CLOUD_KEY, createAuthHandler, createCloudClient, eraseAll, engineStore, parseSignInInput,
   readCloudConfig, saveCloudConfig, sessionStorageFor, shouldNoteChange, signOutSequence, validateCloudConfig
 } from '../app/cloud.js';
 import {
-  captureTask, readState, recordAppEvent, saveTask, settleFocus, startFocus, tickStrict
+  captureTask, clearSyncedData, exportSync, mergeSync, readState, recordAppEvent, registerDevice, saveBlockRule, saveTask,
+  setMission, settleFocus, startFocus, tickStrict
 } from '../app/model.js';
 
 const URL = 'https://abcdefghijklmnopqrst.supabase.co';
@@ -302,7 +303,7 @@ test('backups keep the newest five, newest first', () => {
   for (let n = 1; n <= 7; n += 1) list = addBackup(list, { n }, new Date(Date.UTC(2026, 10, n)), `id-${n}`);
   assert.equal(list.length, 5);
   assert.deepEqual(list.map((item) => item.id), ['id-7', 'id-6', 'id-5', 'id-4', 'id-3']);
-  assert.deepEqual(list[0], { id: 'id-7', savedAt: '2026-11-07T00:00:00.000Z', payload: { n: 7 } });
+  assert.deepEqual(list[0], { id: 'id-7', savedAt: '2026-11-07T00:00:00.000Z', payload: { n: 7 }, source: null });
 });
 
 test('a failed backup or photo cleanup after a successful erase is reported, not thrown', async () => {
@@ -315,4 +316,54 @@ test('a failed backup or photo cleanup after a successful erase is reported, not
   });
   assert.deepEqual(errors, ['db']);
   assert.deepEqual(log, ['engine.erase', 'clearPhotos']);
+});
+
+test('a backup remembers its source account, and restoring into another account needs a second confirmation', () => {
+  const list = addBackup(null, {}, new Date(Date.UTC(2026, 10, 1)), 'a', { uid: 'user-1', email: 'one@example.test' });
+  assert.deepEqual(list[0].source, { uid: 'user-1', email: 'one@example.test' });
+  assert.equal(addBackup(null, {}, new Date(), 'b')[0].source, null);
+  assert.equal(restoreNeedsConfirm(list[0], 'user-1'), false);
+  assert.equal(restoreNeedsConfirm(list[0], 'user-2'), true);
+  assert.equal(restoreNeedsConfirm(list[0], null), true);
+  assert.equal(restoreNeedsConfirm({ source: { uid: null, email: null } }, 'user-2'), false);
+  assert.equal(restoreNeedsConfirm({ source: null }, 'user-2'), false);
+});
+
+const rule = (name) => ({ name, domains: name + '.example', schedule: { type: 'always' }, strength: 'block' });
+
+test('restoring a backup is refused while a rule is enabled, so an older enabled rule cannot be revived', () => {
+  const early = ctx('2026-11-19T08:00:00Z');
+  const recent = ctx('2026-11-19T10:00:00Z');
+  // The device backed up [R1] with a recent stamp, then took the account copy [R1, R2], where R2 is older and enabled.
+  const backedUp = saveBlockRule(readState(memory()), null, rule('r1'), recent);
+  const backup = exportSync(backedUp, { id: 'pc', name: 'PC' }, new Date('2026-11-19T10:05:00Z'));
+  let replaced = saveBlockRule(readState(memory()), null, rule('r2'), early);
+  replaced = { ...replaced, blockRules: [...backup.data.blockRules.map((item) => ({ ...item, id: 'r1' })), ...replaced.blockRules] };
+  assert.equal(replaced.blockRules.length, 2);
+  assert.ok(replaced.blockRules.some((item) => item.enabled));
+  const before = replaced;
+  assert.throws(() => restoreBackup(replaced, backup, ctx('2026-11-19T10:10:00Z')),
+    /Turn off block rules and strict blocks on this device first; the change delay applies./);
+  assert.equal(replaced, before);
+  assert.equal(replaced.blockRules.length, 2, 'R2 stays');
+});
+
+test('restoring after a replace is a clean merge with no conflicts', () => {
+  const pc = (iso) => ctx(iso);
+  let mine = setMission(readState(memory()), 'Finish the report', pc('2026-11-19T08:00:00Z'));
+  mine = captureTask(mine, { title: 'Mine' }, pc('2026-11-19T08:01:00Z'));
+  mine = registerDevice(mine, { id: 'pc', name: 'PC', platform: 'windows' }, new Date('2026-11-19T08:02:00Z'));
+  const backup = exportSync(mine, { id: 'pc', name: 'PC' }, new Date('2026-11-19T08:05:00Z'));
+  // The account copy came from another device, with a later mission and its own task.
+  let theirs = setMission(readState(memory()), 'Launch the app', ctx('2026-11-19T09:00:00Z', 'phone'));
+  theirs = captureTask(theirs, { title: 'Theirs' }, ctx('2026-11-19T09:01:00Z', 'phone'));
+  const account = exportSync(theirs, { id: 'phone', name: 'Phone' }, new Date('2026-11-19T09:05:00Z'));
+  const replaced = mergeSync(clearSyncedData(mine, new Date('2026-11-19T09:10:00Z')), account,
+    { ...ctx('2026-11-19T09:10:00Z'), allowOwn: true, preferRemoteRoot: true }).state;
+  assert.deepEqual(replaced.tasks.map((task) => task.title), ['Theirs']);
+  const { state: restored, summary } = restoreBackup(replaced, backup, ctx('2026-11-19T09:20:00Z'));
+  assert.equal(summary.conflicts, 0, 'restoring is not a conflict storm');
+  assert.deepEqual(restored.conflicts, []);
+  assert.deepEqual(restored.tasks.map((task) => task.title).sort(), ['Mine', 'Theirs']);
+  assert.equal(restored.mission, 'Launch the app', 'the newer mission stays');
 });

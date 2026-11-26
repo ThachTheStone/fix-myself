@@ -1455,6 +1455,7 @@ test('SYS-05: a plain erase refuses while block rules or waiting rule changes ar
   assert.throws(() => eraseUserData(withRule, at(T).getTime()), /Turn off block rules and strict blocks on this device first/);
   const off = { ...withRule, blockRules: withRule.blockRules.map((rule) => ({ ...rule, enabled: false })) };
   if (!protectionsActive(off, at(T))) assert.doesNotThrow(() => eraseUserData(off, at(T).getTime()));
+});
 
 // ---------------------------------------------------------------------------
 // Completion criteria checklist (TASK-01, WB-01, REV-02, SRS 0.8)
