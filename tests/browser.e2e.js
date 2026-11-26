@@ -664,3 +664,46 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
   await page.locator('.cal-block', { hasText: 'Plan the report' }).nth(1).waitFor();
   assert.equal(await page.locator('.cal-block').count(), 2);
 });
+
+test('child tasks nest in the Tasks view, show their ancestors and keep a parent open (TASK-03 to TASK-05)', { timeout: 60_000 }, async (t) => {
+  const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
+  t.after(() => app.httpServer.close());
+  const context = await launch(t);
+  const page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 1400 });
+  await page.goto(`http://127.0.0.1:${app.httpServer.address().port}/#tasks`);
+
+  await page.getByLabel('Quick capture').fill('Payment module');
+  await page.getByRole('button', { name: 'Capture' }).click();
+  await page.locator('#inbox-list').getByRole('link', { name: 'Open Payment module' }).click();
+  const detail = page.locator('#task');
+  await detail.getByLabel('New child task').fill('Query database');
+  await detail.getByRole('button', { name: 'Add child task' }).click();
+  await detail.locator('#child-list').getByRole('link', { name: 'Query database' }).click();
+  await detail.getByLabel('New child task').fill('Read variables');
+  await detail.getByRole('button', { name: 'Add child task' }).click();
+  await detail.locator('#child-list').getByRole('link', { name: 'Read variables' }).waitFor();
+
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+  const list = page.locator('#inbox-list');
+  assert.equal(await list.locator('li.task').count(), 3);
+  assert.equal(await list.locator(':scope > li').count(), 1);
+  const left = async (title) => (await list.locator('li.task').filter({ has: page.getByRole('link', { name: title, exact: true }) }).last().boundingBox()).x;
+  const [top, middle, bottom] = [await left('Payment module'), await left('Query database'), await left('Read variables')];
+  assert.ok(top < middle && middle < bottom, `${top} < ${middle} < ${bottom}`);
+  await list.getByText('0/1 child tasks').first().waitFor();
+  const toggle = list.getByRole('button', { name: 'Collapse child tasks of Payment module' });
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+  await toggle.click();
+  assert.equal(await list.locator('li.task').count(), 1);
+  await list.getByRole('button', { name: 'Expand child tasks of Payment module' }).click();
+  assert.equal(await list.locator('li.task').count(), 3);
+
+  await list.getByRole('link', { name: 'Open Read variables' }).click();
+  assert.equal(await detail.locator('#detail-breadcrumb').textContent(), 'Payment module › Query database');
+  await detail.locator('#detail-breadcrumb').getByRole('link', { name: 'Payment module' }).click();
+  await detail.locator('#detail-input-status').selectOption('completed');
+  await page.getByRole('button', { name: 'Save details' }).click();
+  await page.getByText('Complete or cancel its child tasks first.').waitFor();
+  await detail.getByText('0 of 1 child tasks done').waitFor();
+});
