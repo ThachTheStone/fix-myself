@@ -69,6 +69,7 @@ const en = {
   'focus.inProgress': 'Focus in progress. {coverage}',
   'focus.localRunning': 'Focus timer is running on this device.',
   'focus.localOnly': 'Timer only on this device.',
+  'focus.extensionReload': 'Chrome extension needs a reload; see Settings.',
 
   'reminder.due': '{title} is due',
   'reminder.start': 'Time to start {title}',
@@ -308,6 +309,8 @@ const en = {
   'settings.codeCopied': 'Pairing code copied.',
   'settings.noClipboard': 'Clipboard access is unavailable.',
   'settings.coverage': 'Chrome coverage',
+  'settings.extensionOutdated': 'Extension {version} is older than {expected}. Open chrome://extensions and press Reload on Fix Myself.',
+  'settings.extensionOlder': 'an older version',
   'settings.coverageEmpty': 'No Chrome profile has checked in yet. Install and pair the extension in each profile you use.',
   'settings.covered': 'Covered. Checked in {time}.',
   'settings.unavailableSince': 'Unavailable since {time}. Chrome may be closed, or the extension may be disabled or unpaired.',
@@ -549,6 +552,7 @@ const vi = {
   'focus.inProgress': 'Đang tập trung. {coverage}',
   'focus.localRunning': 'Bộ hẹn giờ tập trung đang chạy trên thiết bị này.',
   'focus.localOnly': 'Chỉ hẹn giờ trên thiết bị này.',
+  'focus.extensionReload': 'Tiện ích Chrome cần được tải lại; xem Cài đặt.',
 
   'reminder.due': '{title} đến hạn',
   'reminder.start': 'Đến giờ bắt đầu {title}',
@@ -788,6 +792,8 @@ const vi = {
   'settings.codeCopied': 'Đã sao chép mã ghép nối.',
   'settings.noClipboard': 'Không truy cập được bộ nhớ tạm.',
   'settings.coverage': 'Phạm vi Chrome',
+  'settings.extensionOutdated': 'Tiện ích {version} cũ hơn {expected}. Mở chrome://extensions và bấm Tải lại ở Fix Myself.',
+  'settings.extensionOlder': 'một phiên bản cũ',
   'settings.coverageEmpty': 'Chưa có hồ sơ Chrome nào kết nối. Cài và ghép nối tiện ích trong từng hồ sơ bạn dùng.',
   'settings.covered': 'Đang được phủ. Kết nối lúc {time}.',
   'settings.unavailableSince': 'Không khả dụng từ {time}. Chrome có thể đang đóng, hoặc tiện ích bị tắt hay chưa ghép nối.',

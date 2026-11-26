@@ -6,7 +6,7 @@ import {
   focusSnapshot, inboxTasks, localDate, markDelivered, mergeSync, normalizeDomains, onLogin,
   parseLeadTimes, pendingDelivery, readState, resolveConflict, saveState, saveTask, saveWorkout,
   setNextAction, snoozeReminder, startFocus, STORAGE_KEY, todayTasks, todayView, toggleTask,
-  updateSettings, weekRange, workoutLabel, recordChromeReports, distractionReview, chromeCoverage,
+  updateSettings, weekRange, workoutLabel, recordChromeReports, distractionReview, chromeCoverage, compareVersions,
   miniTimerView, setMiniTimer
 } from '../app/model.js';
 
@@ -297,6 +297,28 @@ test('REV-03: blocked attempts by site show gaps and compare only fully covered 
   assert.deepEqual(coverage.map(({ name, current }) => [name, current]), [['Work', true]]);
   assert.equal(chromeCoverage(state, Date.parse('2026-11-18T11:00:00Z'))[0].current, false);
   assert.equal(JSON.stringify(exportSync(state, { id: 'pc', name: 'PC' })).includes('youtube.com'), false);
+});
+
+test('Chrome profiles running an older extension are flagged (FOC-05)', () => {
+  assert.equal(compareVersions('0.4.0', '0.5.0'), -1);
+  assert.equal(compareVersions('0.5', '0.5.0'), 0);
+  assert.equal(compareVersions('1.10', '1.9'), 1);
+  const at = Date.parse('2026-11-18T10:00:00Z');
+  const outdated = (version) => {
+    const state = recordChromeReports(
+      { chrome: { profiles: {} } },
+      [{ profileId: 'p', profileName: 'Work', version, attempts: {}, activeDays: [], receivedAt: at }]
+    );
+    return chromeCoverage(state, at, '0.5.0')[0];
+  };
+  assert.equal(outdated(undefined).outdated, true);
+  assert.equal(outdated(undefined).version, null);
+  assert.equal(outdated('0.4.0').outdated, true);
+  assert.equal(outdated('0.5.0').outdated, false);
+  assert.equal(outdated('0.6.0').outdated, false);
+  const state = recordChromeReports({ chrome: { profiles: {} } },
+    [{ profileId: 'p', profileName: 'Work', version: null, attempts: {}, activeDays: [], receivedAt: at }]);
+  assert.equal(chromeCoverage(state, at)[0].outdated, false);
 });
 
 // ---- Focus sessions linked to tasks (FOC-09 to FOC-11)

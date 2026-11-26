@@ -1744,6 +1744,7 @@ export function recordChromeReports(state, reports) {
     if (old && old.lastSeenAt >= lastSeenAt) continue;
     profiles[report.profileId] = {
       name: report.profileName,
+      version: report.version ?? null,
       lastSeenAt,
       // Each report carries the profile's cumulative totals for recent days.
       attempts: { ...old?.attempts, ...report.attempts },
@@ -1758,11 +1759,24 @@ export function recordChromeReports(state, reports) {
   return changed ? { ...state, chrome: { profiles } } : state;
 }
 
-export function chromeCoverage(state, now = Date.now()) {
+// Compares dot-separated integer versions; missing parts count as 0.
+export function compareVersions(a, b) {
+  const left = String(a).split('.').map(Number);
+  const right = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+export function chromeCoverage(state, now = Date.now(), expectedVersion = null) {
   return Object.entries(state.chrome?.profiles ?? {}).map(([id, profile]) => ({
     id,
     name: profile.name,
     lastSeenAt: profile.lastSeenAt,
+    version: profile.version ?? null,
+    outdated: Boolean(expectedVersion) && (profile.version == null || compareVersions(profile.version, expectedVersion) < 0),
     current: now - new Date(profile.lastSeenAt).getTime() <= COVERAGE_STALE_MS
   })).sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 }

@@ -201,6 +201,7 @@ async function report(token) {
     body: JSON.stringify({
       profileId,
       profileName,
+      version: chrome.runtime.getManifest().version,
       activeDays,
       attempts: recent(attempts),
       ruleEvents: recent(ruleEvents),
