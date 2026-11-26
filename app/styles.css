@@ -167,3 +167,30 @@ details.tasks-section summary { cursor: pointer; margin-bottom: 12px; }
   .mission, .focus { min-height: 150px; padding: 19px; }
   .view { padding-top: 27px; }
 }
+
+/* Calendar (PLAN-01, PLAN-02) */
+.cal-scroll { overflow: auto; max-height: calc(100vh - 230px); min-height: 360px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.cal-grid { display: grid; grid-template-columns: 52px repeat(var(--days, 7), minmax(96px, 1fr)); min-width: min-content; }
+.cal-corner, .cal-head { position: sticky; top: 0; z-index: 4; background: var(--paper); border-bottom: 1px solid var(--line); padding: 8px 6px; font-size: .85rem; font-weight: 650; text-align: center; }
+.cal-head.today { color: var(--green); }
+.cal-hours { position: relative; height: 1152px; }
+.cal-hour { position: absolute; right: 6px; transform: translateY(-50%); font-size: .75rem; color: var(--muted); }
+.cal-day { position: relative; height: 1152px; border-left: 1px solid var(--line); user-select: none;
+  background: repeating-linear-gradient(to bottom, var(--line) 0, var(--line) 1px, transparent 1px, transparent 48px); }
+.cal-day.today { background-color: rgb(24 61 47 / .04); }
+.cal-block { position: absolute; box-sizing: border-box; display: block; overflow: hidden; padding: 3px 6px 8px; text-align: left; font: inherit; font-size: .78rem;
+  color: var(--ink); background: #dcebd9; border: 1px solid var(--green); border-radius: 6px; cursor: pointer; z-index: 2; }
+.cal-block.strict { border-width: 2px; background: #cfe4cb; }
+.cal-block.completed { opacity: .55; text-decoration: line-through; }
+.cal-block.dragging { z-index: 6; box-shadow: 0 4px 14px rgb(0 0 0 / .25); }
+.cal-block.read-only { cursor: pointer; }
+.cal-block-title { display: block; font-weight: 650; overflow-wrap: anywhere; }
+.cal-block-time, .cal-tag { display: block; font-size: .72rem; color: var(--muted); }
+.cal-tag { font-weight: 650; color: var(--green); }
+.cal-handle { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; background: rgb(24 61 47 / .35); }
+.cal-deadline { position: absolute; left: 0; right: 0; z-index: 3; border-top: 2px solid #b3261e; pointer-events: none; }
+.cal-deadline span { position: absolute; right: 2px; top: 0; max-width: 100%; padding: 0 4px; font-size: .7rem; color: #fff; background: #b3261e; border-radius: 0 0 4px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-now { position: absolute; left: 0; right: 0; z-index: 5; border-top: 2px solid #d4570f; pointer-events: none; }
+.cal-ghost { position: absolute; left: 2px; right: 2px; z-index: 5; background: rgb(24 61 47 / .25); border: 1px dashed var(--green); border-radius: 6px; pointer-events: none; font-size: .75rem; padding: 2px 4px; }
+#calendar-range-text { margin: 12px 0 0; }
+.cal-grid.editable .cal-day, .cal-grid.editable .cal-block { touch-action: none; }

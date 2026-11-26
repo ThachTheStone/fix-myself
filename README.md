@@ -48,6 +48,10 @@ Each paired profile reports back the days it was running and a daily count of bl
 
 A work block can be marked **Strict** when the task has subtasks or completion criteria. When it starts, Fix Myself holds a focus session on that task: no Pause, End session or task change. If the task is still open at the end, the hold extends in 15-minute steps up to twice the block's length. **Emergency exit** asks for a 2-minute wait and a reason. Removing strict, shortening or moving a block later waits for the change delay in Settings. The weekly review lists how each strict block ended.
 
+## Calendar
+
+Open **Calendar** to see work blocks in a week grid (Monday first) or a day grid, with a "now" line, deadlines marked as "Due: ..." lines, and a tag on strict blocks and on blocks with a change waiting. On Windows and in the browser preview, drag a block to move it (across days in week view), drag its bottom edge to change its length, or drag over empty time (or click an empty slot for an hour) to add a block for a task. Times snap to 15 minutes, and Escape cancels a drag. Edits go through the same rules as the task page, so a strict block that is already running changes only after the change delay. Android shows the grid but cannot edit it. Deadlines never move.
+
 ## Block rules
 
 **Settings → Block rules** keeps sites closed outside focus sessions. Name a rule, list its sites as domains (one per line, up to 30), and choose a schedule: **Always**, or **Scheduled** with time windows on the days you pick. Times follow the planning time zone, and a window that crosses midnight belongs to the day it starts. Under **When a listed site opens**, **Block it** sends the page straight to the intervention page, while **Pause, then allow a pass** counts down first and then opens a pass for a few minutes.
