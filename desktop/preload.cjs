@@ -15,5 +15,7 @@ contextBridge.exposeInMainWorld('fixMyselfDesktop', {
   onAppIntervention: (callback) => ipcRenderer.on('desktop:app-intervention', (_event, view) => callback(view)),
   onAppEvent: (callback) => ipcRenderer.on('desktop:app-event', (_event, record) => callback(record)),
   onAppCoverage: (callback) => ipcRenderer.on('desktop:app-coverage', (_event, coverage) => callback(coverage)),
+  setMiniTimer: (view) => ipcRenderer.invoke('desktop:mini-timer', view),
+  onMiniTimerToggle: (callback) => ipcRenderer.on('desktop:mini-toggle', () => callback()),
   show: () => ipcRenderer.invoke('desktop:show')
 });

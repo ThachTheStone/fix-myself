@@ -11,6 +11,7 @@ import {
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
   readState, reconcileReminders,
   registerDevice, remindsOn, resolveConflict, saveAppPreset, saveBlockRule, saveState, saveTask, saveWorkout,
+  miniTimerView, setMiniTimer,
   setAutoAppPreset, setBlockRuleEnabled, setChangeDelay, setMission, setNextAction, snoozeReminder, startFocus,
   STATUSES, toggleTask,
   todayView, upcomingReminders, updateSettings, weekRange, addDays, WORKOUT_TYPES
@@ -198,6 +199,27 @@ function syncChrome() {
   publishAppLimit();
 }
 
+// Tells the floating timer window what to show; it counts down by itself (FOC-12).
+function publishMiniTimer() {
+  if (desktop?.platform !== 'win32') return;
+  const mini = state.preferences.miniTimer;
+  const view = mini?.enabled ? miniTimerView(state, new Date()) : null;
+  const payload = view
+    ? {
+      show: true,
+      endAt: view.endAt,
+      label: view.taskTitle ?? t('mini.wandering'),
+      status: view.strict ? t('mini.strict') : view.paused ? t('mini.paused') : '',
+      clickThrough: Boolean(mini.clickThrough)
+    }
+    : { show: false };
+  desktop.setMiniTimer(payload).catch(reportError);
+}
+
+function changeMiniTimer(changes) {
+  if (attempt(() => setMiniTimer(state, changes))) publishMiniTimer();
+}
+
 // A waiting change becomes real when its moment passes, even if Settings is
 // closed (BLK-06). The extension applies the same moment by itself.
 function checkRuleChanges() {
@@ -298,10 +320,18 @@ function renderTimer(now = Date.now()) {
     running ? appCoverageText() : ''
   ].filter(Boolean).join(' ');
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
-  const signature = [running, blocking, state.focus?.endAt, state.focus?.blockUntil, state.focus?.taskId].join('|');
+  const mini = state.preferences.miniTimer ?? {};
+  const showMini = desktop?.platform === 'win32';
+  element('mini-timer-field').hidden = !showMini;
+  element('mini-timer-through-field').hidden = !showMini || !mini.enabled;
+  element('mini-timer-toggle').checked = Boolean(mini.enabled);
+  element('mini-timer-through').checked = Boolean(mini.clickThrough);
+  const signature = [running, blocking, state.focus?.endAt, state.focus?.blockUntil, state.focus?.taskId,
+    paused, Boolean(hold)].join('|');
   if (previousFocusStatus !== signature) {
     previousFocusStatus = signature;
     syncChrome();
+    publishMiniTimer();
   }
 }
 
@@ -1467,6 +1497,9 @@ function showTask() {
 // Event wiring
 
 function wireToday() {
+  element('mini-timer-toggle').addEventListener('change', (event) => changeMiniTimer({ enabled: event.target.checked }));
+  element('mini-timer-through').addEventListener('change', (event) => changeMiniTimer({ clickThrough: event.target.checked }));
+  desktop?.onMiniTimerToggle?.(() => changeMiniTimer({ enabled: !state.preferences.miniTimer.enabled }));
   document.querySelectorAll('[data-add-task]').forEach((button) => button.addEventListener('click', showTask));
   document.querySelectorAll('[data-close-dialog]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
@@ -1742,6 +1775,7 @@ function wireSettings() {
     resetRuleForm();
     resetPresetForm();
     render();
+    publishMiniTimer();
     if (currentView === 'task') renderDetail(false);
     if (currentView === 'settings') refreshNotifications().catch(reportError);
   });

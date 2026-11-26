@@ -6,7 +6,8 @@ import {
   focusSnapshot, inboxTasks, localDate, markDelivered, mergeSync, normalizeDomains, onLogin,
   parseLeadTimes, pendingDelivery, readState, resolveConflict, saveState, saveTask, saveWorkout,
   setNextAction, snoozeReminder, startFocus, STORAGE_KEY, todayTasks, todayView, toggleTask,
-  updateSettings, weekRange, workoutLabel, recordChromeReports, distractionReview, chromeCoverage
+  updateSettings, weekRange, workoutLabel, recordChromeReports, distractionReview, chromeCoverage,
+  miniTimerView, setMiniTimer
 } from '../app/model.js';
 
 function makeStorage(initial = null) {
@@ -749,4 +750,51 @@ test('WB-04: strictReview counts outcomes by planning day and lists exits newest
   assert.deepEqual(review.counts, { on_time: 0, extended: 0, limit_reached: 1, exited: 2, canceled: 0, missed: 0 });
   assert.deepEqual(review.exits.map((item) => item.reason), ['second', 'first']);
   assert.equal(review.exits[0].title, 'Write report');
+});
+
+// ---- Floating timer (FOC-12)
+
+test('FOC-12: miniTimerView is null without a running session and after End', () => {
+  const { state } = withTask();
+  const n = ctx('2026-11-19T09:05:00Z');
+  assert.equal(miniTimerView(state, n.now), null);
+  const running = startFocus(state, at('2026-11-19T09:00:00Z'));
+  assert.notEqual(miniTimerView(running, n.now), null);
+  assert.equal(miniTimerView(endFocus(running, n), n.now), null);
+});
+
+test('FOC-12: miniTimerView reports the task, wandering, pause and strict hold', () => {
+  const { state, id } = withTask();
+  const n = ctx('2026-11-19T09:05:00Z');
+  const withId = startFocus(state, at('2026-11-19T09:00:00Z'), { taskId: id });
+  const view = miniTimerView(withId, n.now);
+  assert.equal(view.taskTitle, 'Write');
+  assert.equal(view.endAt, withId.focus.endAt);
+  assert.equal(view.paused, false);
+  assert.equal(view.strict, false);
+  assert.equal(miniTimerView(pauseFocus(withId, n), n.now).paused, true);
+  const wandering = startFocus(state, at('2026-11-19T09:00:00Z'));
+  assert.equal(miniTimerView(wandering, n.now).taskTitle, null);
+  const gone = { ...withId, tasks: [] };
+  assert.equal(miniTimerView(gone, n.now).taskTitle, null);
+  const held = tickStrict(strictTask().state, ctx('2026-11-19T10:00:00Z'));
+  assert.equal(miniTimerView(held, at('2026-11-19T10:01:00Z')).strict, true);
+});
+
+test('FOC-12: setMiniTimer merges booleans and keeps the object when unchanged', () => {
+  const state = fresh();
+  assert.deepEqual(state.preferences.miniTimer, { enabled: false, clickThrough: false });
+  assert.equal(setMiniTimer(state, {}), state);
+  assert.equal(setMiniTimer(state, { enabled: false }), state);
+  const on = setMiniTimer(state, { enabled: 1 });
+  assert.deepEqual(on.preferences.miniTimer, { enabled: true, clickThrough: false });
+  assert.equal(setMiniTimer(on, { enabled: true }), on);
+  assert.deepEqual(setMiniTimer(on, { clickThrough: true }).preferences.miniTimer, { enabled: true, clickThrough: true });
+});
+
+test('FOC-12: a v3 state saved without miniTimer loads with the defaults', () => {
+  const saved = fresh();
+  delete saved.preferences.miniTimer;
+  const loaded = readState(makeStorage(JSON.stringify(saved)));
+  assert.deepEqual(loaded.preferences.miniTimer, { enabled: false, clickThrough: false });
 });
