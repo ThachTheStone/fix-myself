@@ -136,6 +136,8 @@ State cục bộ chuyển từ `version: 2` sang `version: 3`, kèm hàm chuyể
 - `pendingBlockChanges` gộp kiểu bản ghi sau thắng, nên hai thiết bị cùng xếp chờ có thể mất một mục. Khi đó block giữ nguyên, tức là lỗi nghiêng về phía an toàn.
 - Khóa việc con chỉ có hiệu lực trong lúc giữ phiên. Trước khi block bắt đầu, người dùng có thể đặt tiêu chí hoàn thành rồi xóa các việc con chưa xong. Đến giờ block, họ chỉ cần bấm hoàn thành.
 - Đã sửa ngày 2026-11-26: đổi múi giờ kế hoạch từng rút được độ trễ `next-day`. Giờ `updateSettings` đưa việc đổi múi giờ vào `pendingRuleChanges` (loại `timeZone`) khi có quy tắc chặn đang bật hoặc block strict chưa kết thúc. `effectiveRules` trả `zoneChanged` và `timeZone` để app và extension cùng đổi múi giờ đúng hạn, kể cả khi app đóng. Bridge kiểm tra tên múi giờ trước khi gửi cho Chrome. Một extension bản cũ không hiểu loại thay đổi này thì giữ múi giờ cũ cho đến khi app gửi bản kế hoạch mới.
+- Cây task (TASK-03): task con đang mở làm task cha đủ điều kiện có block strict (`strictEligible`). Hoàn thành task con luôn được phép, nên người dùng có thể thêm một task con làm cho có, đặt strict rồi hoàn thành nó ngay; block strict khi đó không còn gì để giữ. Đây là lựa chọn có chủ ý: chặn lại thì sẽ khóa luôn lối ra bình thường khi làm xong việc.
+- Chuyển, hủy hoặc xóa task con đến từ máy khác qua đồng bộ không đi qua kiểm tra `checkAncestorsNeedIt`, nên task cha có thể còn block strict mà không đủ điều kiện. Không có phiên đang giữ nào bị phá; người dùng sửa lại trên máy.
 
 Phần desktop cần thêm:
 
