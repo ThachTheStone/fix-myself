@@ -1763,8 +1763,30 @@ export function clearSyncedData(state, now = new Date()) {
     'blockRules', 'pendingRuleChanges', 'appPresets', 'pendingBlockChanges', 'focusSegments', 'strictLog', 'conflicts', 'peers']) {
     next[field] = fresh[field];
   }
-  if (next.focus?.taskId != null) next.focus = { ...next.focus, taskId: null };
+  // focus is left as is: a replace merges the account copy in next, and the
+  // session's task usually comes back. Call settleFocusTask after the merge.
   return reconcileReminders(next, now);
+}
+
+// After a replace or erase, a running session whose task no longer exists
+// continues as wandering.
+export function settleFocusTask(state) {
+  const taskId = state.focus?.taskId;
+  if (taskId == null || state.tasks.some((task) => task.id === taskId)) return state;
+  return { ...state, focus: { ...state.focus, taskId: null } };
+}
+
+// True while this device enforces something a replace or erase could weaken at
+// once: an enabled block rule, a change still waiting for its delay, an upcoming
+// strict work block, or a strict hold (BLK-06, WB-01 to WB-04). Sync must not
+// be a faster way to remove protection than the change delay.
+export function protectionsActive(state, now = new Date()) {
+  const nowMs = +now;
+  if ((state.blockRules ?? []).some((rule) => rule.enabled)) return true;
+  if ((state.pendingRuleChanges ?? []).length > 0 || (state.pendingBlockChanges ?? []).length > 0) return true;
+  if (state.focus?.strict) return true;
+  return (state.tasks ?? []).some((task) => (task.workBlocks ?? [])
+    .some((block) => block.strict && Date.parse(block.end) > nowMs));
 }
 
 // ---------------------------------------------------------------------------

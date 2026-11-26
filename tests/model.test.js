@@ -1302,7 +1302,7 @@ test('TASK-03: an active child of a closed parent is not nested under it', () =>
 
 // ---------------------------------------------------------------------------
 // Account sync support (SYS-02, SYS-05): schema, own payloads, remote-first root, ties, clear.
-import { clearSyncedData, eraseUserData, SYNC_SCHEMA } from '../app/model.js';
+import { clearSyncedData, eraseUserData, protectionsActive, settleFocusTask, SYNC_SCHEMA } from '../app/model.js';
 
 const PC = { id: 'pc', name: 'PC' };
 const PHONE = { id: 'phone', name: 'Phone' };
@@ -1407,14 +1407,32 @@ test('SYS-05: clearSyncedData resets synced fields and keeps device-local ones',
   for (const field of ['deleted', 'stamps', 'supersedes', 'devices', 'peers', 'reminders']) assert.deepEqual(cleared[field], {}, field);
   assert.equal(cleared.mission, '');
   assert.equal(cleared.nextActionId, null);
-  assert.deepEqual(cleared.focus, { ...focus, taskId: null });
+  // focus is untouched; settleFocusTask decides after a merge whether the task still exists.
+  assert.deepEqual(cleared.focus, focus);
+  assert.equal(settleFocusTask(cleared).focus.taskId, null);
+  assert.equal(settleFocusTask(state), state);
   assert.deepEqual(cleared.chrome, state.chrome);
   assert.deepEqual(cleared.appActivity, state.appActivity);
   assert.equal(cleared.lastLoginDay, '2026-11-19');
   assert.deepEqual(cleared.preferences, state.preferences);
   assert.deepEqual(cleared.settings, state.settings);
-  // The held task is gone, so tickStrict clears the hold through its missing-task path.
-  assert.equal(tickStrict(cleared, ctx(T)).focus.strict, null);
+  // The engine never clears a device in this state: rules, a strict block and a hold are active.
+  assert.equal(protectionsActive(state, at(T)), true);
+});
+
+test('protectionsActive covers rules, waiting changes, strict blocks and holds (BLK-06, WB-01)', () => {
+  const T = '2026-11-19T09:00:00Z';
+  assert.equal(protectionsActive(fresh(), at(T)), false);
+  const ruled = saveBlockRule(fresh(), null, { name: 'Social', domains: ['youtube.com'], enabled: true }, ctx(T0));
+  assert.equal(protectionsActive(ruled, at(T)), true);
+  const off = saveBlockRule(fresh(), null, { name: 'Social', domains: ['youtube.com'], enabled: false }, ctx(T0));
+  assert.equal(protectionsActive(off, at(T)), false);
+  assert.equal(protectionsActive({ ...fresh(), pendingRuleChanges: [{ id: 'p' }] }, at(T)), true);
+  assert.equal(protectionsActive({ ...fresh(), pendingBlockChanges: [{ id: 'p' }] }, at(T)), true);
+  const strict = captureTask(fresh(), { title: 'Write', subtasks: [{ id: 's1', title: 'Draft', done: false }], workBlocks: [BLOCK] }, ctx(T0));
+  assert.equal(protectionsActive(strict, at(T)), true, 'an upcoming strict block');
+  assert.equal(protectionsActive(strict, at('2026-11-19T12:00:00Z')), false, 'a strict block that has ended');
+  assert.equal(protectionsActive({ ...fresh(), focus: { strict: { blockId: 'b' } } }, at(T)), true);
 });
 
 test('SYS-05: a plain erase refuses during a focus session or strict hold', () => {

@@ -3,7 +3,9 @@
 // Supabase client, the engine's own memory (`store`) and the way a merged state
 // is installed all come from the caller. mergeSync stays the only place where
 // values are decided; this file decides only when to read, merge and push.
-import { clearSyncedData, eraseUserData, exportSync, mergeSync, SYNC_SCHEMA } from './model.js';
+import {
+  clearSyncedData, eraseUserData, exportSync, mergeSync, protectionsActive, settleFocusTask, SYNC_SCHEMA
+} from './model.js';
 
 const TABLE = 'sync_docs';
 const DEBOUNCE_MS = 3000;
@@ -19,8 +21,11 @@ const KEY = {
   dirty: 'cloud.dirty',
   eraseSeen: 'cloud.eraseSeen',
   mergePushes: 'cloud.mergePushes',
-  changeGen: 'cloud.changeGen'
+  changeGen: 'cloud.changeGen',
+  bindingPending: 'cloud.bindingPending'
 };
+
+const PROTECTED_MESSAGE = 'Turn off block rules and strict blocks on this device first; the change delay applies.';
 
 const LISTS = ['tasks', 'workouts', 'focusSegments', 'strictLog', 'blockRules', 'appPresets',
   'pendingRuleChanges', 'pendingBlockChanges'];
@@ -164,6 +169,17 @@ export function createCloudSync({
       emit('signed-out');
       return null;
     }
+    // A replace that stopped after installing the account copy but before
+    // recording the binding: finish the binding instead of merging the copy
+    // into the previously bound account.
+    const pending = getKey(KEY.bindingPending);
+    if (pending) {
+      if (pending === user.uid) {
+        rebind(user.uid);
+        store.set(KEY.dirty, true);
+      }
+      store.set(KEY.bindingPending, null);
+    }
     const bound = getKey(KEY.account);
     if (bound === user.uid) {
       gate = null;
@@ -207,15 +223,39 @@ export function createCloudSync({
       updateApp();
       return false;
     }
-    const local = getState();
-    if (hasPlanData(local)) {
+    // Replacing would drop this device's rules, waiting changes and strict
+    // blocks at once, so it waits until they are turned off the normal way.
+    if (protectionsActive(getState(), nowDate())) {
+      emit('error', { code: 'protected', message: PROTECTED_MESSAGE });
+      return false;
+    }
+    // The backup must hold exactly what is about to be cleared: retry when the
+    // plan changed while the backup was being written.
+    let backedUp = false;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS && !backedUp; attempt += 1) {
+      const snapshot = getState();
+      if (!hasPlanData(snapshot)) {
+        backedUp = true;
+        break;
+      }
+      const gen = generation();
       try {
-        await saveBackup(exportSync(local, device, nowDate()));
+        await saveBackup(exportSync(snapshot, device, nowDate()));
       } catch (error) {
         emit('error', { code: 'backup', message: error?.message ?? 'The backup could not be saved.' });
         return false;
       }
+      backedUp = generation() === gen;
     }
+    if (!backedUp) {
+      emit('error', { code: 'backup', message: 'The plan kept changing while it was being backed up. Try again.' });
+      return false;
+    }
+    if (protectionsActive(getState(), nowDate())) {
+      emit('error', { code: 'protected', message: PROTECTED_MESSAGE });
+      return false;
+    }
+    // From here to applyMerged there is no await, so the backup matches what is cleared.
     const base = clearSyncedData(getState(), nowDate());
     let next = base;
     let summary = null;
@@ -227,8 +267,10 @@ export function createCloudSync({
         return false;
       }
     }
-    await applyMerged(next, { reason: 'replace', summary });
+    store.set(KEY.bindingPending, uid);
+    await applyMerged(settleFocusTask(next), { reason: 'replace', summary });
     rebind(uid);
+    store.set(KEY.bindingPending, null);
     if (row) {
       store.set(KEY.rev, row.rev);
       store.set(KEY.eraseSeen, row.payload.erasedAt ?? null);
@@ -404,7 +446,11 @@ export function createCloudSync({
     const marker = pendingErase;
     if (!marker) return;
     if (choice === 'erase-here') {
-      await applyMerged(clearSyncedData(getState(), nowDate()), { reason: 'erase', summary: null });
+      if (protectionsActive(getState(), nowDate())) {
+        emit('error', { code: 'protected', message: PROTECTED_MESSAGE });
+        return;
+      }
+      await applyMerged(settleFocusTask(clearSyncedData(getState(), nowDate())), { reason: 'erase', summary: null });
       pendingErase = null;
       store.set(KEY.eraseSeen, marker.payload.erasedAt);
       store.set(KEY.rev, marker.rev);
@@ -489,21 +535,26 @@ export function createCloudSync({
   // first; the local data is cleared only after it is stored.
   async function eraseEverywhere(state = getState()) {
     eraseUserData(state, nowMs()); // Refuses during a focus session or strict hold.
+    if (protectionsActive(state, nowDate())) throw failure(PROTECTED_MESSAGE, { code: 'protected' });
     const wasStarted = started;
     await stop();
     try {
       const user = await sessionUser();
       if (!user) throw failure('Sign in to erase the account copy.');
+      // Only the account this device is bound to; never another account's copy
+      // while a link or account-change choice is pending.
+      if (getKey(KEY.account) !== user.uid) throw failure('Finish linking this device to the account first.', { code: 'not-bound' });
       const erasedAt = nowDate().toISOString();
-      const emptied = clearSyncedData(state, nowDate());
-      const marker = { ...exportSync(emptied, device, nowDate()), erasedAt };
+      const marker = { ...exportSync(clearSyncedData(state, nowDate()), device, nowDate()), erasedAt };
       let rev = null;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS && rev === null; attempt += 1) {
         const row = await readRow('rev', user.uid);
         rev = await pushRpc(row ? row.rev : 0, marker);
       }
       if (rev === null) throw failure('The account copy keeps changing. Try again shortly.', { code: 'busy' });
-      await applyMerged(emptied, { reason: 'erase', summary: null });
+      // Recomputed after the awaits so device-local changes made meanwhile (a
+      // session that started, for example) are kept.
+      await applyMerged(settleFocusTask(clearSyncedData(getState(), nowDate())), { reason: 'erase', summary: null });
       rebind(user.uid);
       store.set(KEY.eraseSeen, erasedAt);
       store.set(KEY.rev, rev);

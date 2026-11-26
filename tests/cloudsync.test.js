@@ -283,7 +283,8 @@ test('a first link onto an existing row asks, and replace gives the remote rules
   await a.engine.start();
   const b = makeDevice(server, 'dev-b');
   b.clock.ms = T0 + 3_600_000; // newer local stamps
-  b.edit((state, ctx) => saveBlockRule(captureTask(state, { title: 'Local task' }, ctx), null, { name: 'Local rule', domains: ['facebook.com'], enabled: true }, ctx));
+  // The local rule is turned off: an enabled one would block the replace (see the next test).
+  b.edit((state, ctx) => saveBlockRule(captureTask(state, { title: 'Local task' }, ctx), null, { name: 'Local rule', domains: ['facebook.com'], enabled: false }, ctx));
   const pushes = server.pushes;
   const stateBefore = b.state;
   await b.engine.start();
@@ -299,6 +300,56 @@ test('a first link onto an existing row asks, and replace gives the remote rules
   assert.equal(b.store.get('cloud.account'), 'user-1');
   assert.equal(b.state.devices['dev-b'].name, b.name, 'the device registers itself after the apply');
   assert.equal(b.engine.status().status, 'synced');
+});
+
+test('BLK-06: replace waits while this device has an enabled rule, a waiting change or a strict block', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, 'dev-a');
+  a.edit((state, ctx) => captureTask(state, { title: 'Remote task' }, ctx)); // the other account copy has no rules
+  await a.engine.start();
+  const b = makeDevice(server, 'dev-b');
+  b.edit((state, ctx) => saveBlockRule(captureTask(state, { title: 'Local task' }, ctx), null, { name: 'Local rule', domains: ['youtube.com'], enabled: true }, ctx));
+  await b.engine.start();
+  assert.equal(b.last().status, 'link-needed');
+  const before = b.state;
+  await b.engine.chooseLink('replace');
+  assert.deepEqual([b.last().status, b.last().code], ['error', 'protected']);
+  assert.equal(b.state, before, 'the rule is still there');
+  assert.equal(b.store.get('cloud.account') ?? null, null);
+  assert.equal(b.backups.length, 0);
+  // Turning the rule off goes through the change delay; once applied, replace works.
+  b.edit((state, ctx) => ({ ...state, blockRules: state.blockRules.map((rule) => ({ ...rule, enabled: false })) }));
+  await b.engine.chooseLink('replace');
+  assert.deepEqual(titles(b), ['Remote task']);
+  assert.deepEqual(b.state.blockRules, []);
+});
+
+test('a plan edited while the backup is written is backed up again before it is replaced', async () => {
+  const server = makeServer();
+  const a = makeDevice(server, 'dev-a');
+  a.edit((state, ctx) => captureTask(state, { title: 'Remote' }, ctx));
+  await a.engine.start();
+  const b = makeDevice(server, 'dev-b');
+  b.edit((state, ctx) => captureTask(state, { title: 'Local' }, ctx));
+  const backups = [];
+  let edited = false;
+  const engine = createCloudSync({
+    client: b.client, store: { get: (key) => b.store.get(key) ?? null, set: (key, value) => { b.store.set(key, value); } },
+    getState: () => b.state, applyMerged: (state) => { b.state = state; }, device: { id: 'dev-b', name: b.name }, now: b.now,
+    onStatus: (status) => b.statuses.push(status), timers: b.timers, events: null,
+    saveBackup: async (payload) => {
+      backups.push(payload.data.tasks.map((task) => task.title));
+      if (!edited) {
+        edited = true;
+        b.state = captureTask(b.state, { title: 'Typed during the backup' }, { now: new Date(b.now()), device: 'dev-b' });
+        engine.noteLocalChange();
+      }
+    }
+  });
+  await engine.start();
+  await engine.chooseLink('replace');
+  assert.equal(backups.length, 2);
+  assert.ok(backups[1].includes('Typed during the backup'), 'the last backup holds the edit that was cleared');
 });
 
 test('a backup that fails aborts the replace and leaves everything untouched', async () => {
@@ -405,7 +456,7 @@ function runningFocus(extra = {}) {
   };
 }
 
-test('FOC-04: replace keeps a running session, its strict hold and the Chrome data', async () => {
+test('FOC-04: replace keeps a running session and the Chrome data, and refuses during a strict hold', async () => {
   const server = makeServer();
   const a = makeDevice(server, 'dev-a');
   a.edit((state, ctx) => captureTask(state, { title: 'Remote' }, ctx));
@@ -413,12 +464,64 @@ test('FOC-04: replace keeps a running session, its strict hold and the Chrome da
   const b = makeDevice(server, 'dev-b');
   b.edit((state, ctx) => captureTask(state, { title: 'Local' }, ctx));
   b.state = { ...b.state, focus: runningFocus(), chrome: { profiles: { p1: { id: 'p1', seenAt: 1 } } } };
-  const { focus, chrome } = b.state;
   await b.engine.start();
+  // WB-04: a hold ends only through the emergency exit, never through a replace.
+  const held = b.state;
+  await b.engine.chooseLink('replace');
+  assert.deepEqual([b.last().status, b.last().code], ['error', 'protected']);
+  assert.equal(b.state, held);
+  b.state = { ...b.state, focus: runningFocus({ strict: null }) };
+  const { focus, chrome } = b.state;
   await b.engine.chooseLink('replace');
   assert.deepEqual(b.state.focus, focus);
   assert.deepEqual(b.state.chrome, chrome);
   assert.deepEqual(titles(b), ['Remote']);
+});
+
+test('a running task session keeps its task when the account copy has it', async () => {
+  const { a, b } = await pair();
+  const taskId = b.state.tasks[0].id;
+  // B forgets its binding (for example after a reinstall of the engine store) and links again.
+  b.store.set('cloud.account', null);
+  b.state = { ...b.state, focus: runningFocus({ strict: null, taskId }) };
+  await b.engine.start();
+  assert.equal(b.last().status, 'link-needed');
+  await b.engine.chooseLink('replace');
+  assert.equal(b.state.focus.taskId, taskId, 'the session stays on its task');
+  assert.ok(titles(a).length > 0);
+});
+
+test('a new, empty account after an account change does not receive the old account plan', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  await b.engine.start();
+  assert.equal(b.last().status, 'account-changed');
+  await b.engine.chooseLink('replace');
+  assert.equal(b.backups.length, 1, 'the old plan is backed up on the device');
+  assert.equal(server.row('user-2').payload.data.tasks.length, 0);
+});
+
+test('eraseEverywhere refuses while another account is waiting for a choice', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  await b.engine.start();
+  assert.equal(b.last().status, 'account-changed');
+  const rpcs = server.rpcLog.length;
+  await assert.rejects(() => b.engine.eraseEverywhere(b.state), /Finish linking this device/);
+  assert.equal(server.rpcLog.length, rpcs);
+  assert.ok(server.row('user-2').payload.data.tasks.length > 0, 'the other account copy is untouched');
+});
+
+test('a replace interrupted before the binding is recorded finishes on the next start', async () => {
+  const { server, b } = await pair();
+  b.session.user = USER2;
+  server.rows.set('user-2', structuredClone(server.row('user-1')));
+  // Simulate a crash after the account copy was installed but before the binding was written.
+  b.store.set('cloud.bindingPending', 'user-2');
+  await b.engine.start();
+  assert.equal(b.store.get('cloud.account'), 'user-2');
+  assert.notEqual(b.last().status, 'account-changed');
 });
 
 test('erase here keeps a running session, and a plain erase during a session throws', async () => {
@@ -433,10 +536,18 @@ test('erase here keeps a running session, and a plain erase during a session thr
   await b.engine.eraseEverywhere(b.state);
   await a.engine.syncNow();
   assert.equal(a.last().status, 'erased');
+  // A strict hold blocks erase-here; the prompt stays.
+  const held = a.state;
   await a.engine.chooseErase('erase-here');
-  assert.deepEqual(a.state.focus, focus);
+  assert.deepEqual([a.last().status, a.last().code], ['error', 'protected']);
+  assert.equal(a.state, held);
+  a.state = { ...a.state, focus: runningFocus({ strict: null }) };
+  const running = a.state.focus;
+  await a.engine.chooseErase('erase-here');
+  assert.deepEqual(a.state.focus, running);
   assert.deepEqual(a.state.chrome, chrome);
   assert.deepEqual(a.state.tasks, []);
+  assert.ok(focus);
 });
 
 test('erase durability: a later normal push keeps the marker, so an offline device still hears about it', async () => {
