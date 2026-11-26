@@ -7,7 +7,7 @@ import {
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused, isSessionRunning, endFocus, pauseFocus, resumeFocus, settleFocus,
   taskFocusMinutes, focusTimeReview, addChildTask, ancestorsOf, childProgress, childrenOf, deadlineAfterParent,
   parentChoices, subtreeFocusMinutes, effectiveParents, nestedChildren,
-  appLimitSnapshot, appReview, recordAppEvent,
+  appLimitSnapshot, appReview, foldAllCriteria, recordAppEvent,
   markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
   readState, reconcileReminders, localDate,
@@ -570,7 +570,7 @@ function renderTimer(now = Date.now()) {
 function taskMeta(task, isNext) {
   const now = new Date().toISOString();
   const upcomingBlock = task.workBlocks.find((block) => block.end > now);
-  const doneSubtasks = task.subtasks.filter((item) => item.done).length;
+  const doneCriteria = task.subtasks.filter((item) => item.done).length;
   const progress = childProgress(state, task.id);
   return [
     isNext ? t('meta.next') : '',
@@ -580,7 +580,7 @@ function taskMeta(task, isNext) {
     task.plannedDate ? t('meta.planned', { day: formatDay(task.plannedDate) }) : '',
     upcomingBlock ? t('meta.block', { range: formatRange(upcomingBlock.start, upcomingBlock.end) }) : '',
     task.deadline ? t(isActive(task) && task.deadline < now ? 'meta.overdue' : 'meta.due', { time: formatTime(task.deadline) }) : '',
-    task.subtasks.length ? t('meta.subtasks', { done: doneSubtasks, total: task.subtasks.length }) : '',
+    task.subtasks.length ? t('meta.criteria', { done: doneCriteria, total: task.subtasks.length }) : '',
     progress.total ? t('tree.meta', progress) : '',
     task.effortMinutes ? t('common.minutesShort', { n: task.effortMinutes }) : ''
   ].filter(Boolean).join(' · ');
@@ -762,7 +762,6 @@ function fillDetailForm(task) {
   fields.plannedDate.value = task.plannedDate ?? '';
   fields.deadline.value = toLocalInput(task.deadline);
   fields.nextStep.value = task.nextStep;
-  fields.criteria.value = task.criteria;
   fields.pinned.checked = task.pinned;
   fields.pinned.disabled = !isActive(task);
   fields.supportsMission.checked = task.supportsMission;
@@ -809,7 +808,7 @@ function renderDetail(fresh) {
   element('detail-body').hidden = !task;
   if (fresh) {
     for (const key of [...sectionCache.keys()]) if (key.startsWith('detail:')) sectionCache.delete(key);
-    for (const id of ['detail-feedback', 'commitment-feedback', 'subtask-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback', 'child-feedback']) {
+    for (const id of ['detail-feedback', 'commitment-feedback', 'criteria-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback', 'child-feedback']) {
       element(id).textContent = '';
     }
   }
@@ -847,18 +846,18 @@ function renderDetail(fresh) {
     }
   }
 
-  if (!cached('detail:subtasks', task.subtasks)) {
-    element('subtask-list').replaceChildren(...task.subtasks.map((item) => h('li', { class: 'subtask' },
+  if (!cached('detail:criteria', task.subtasks)) {
+    element('criteria-list').replaceChildren(...task.subtasks.map((item) => h('li', { class: 'subtask' },
       h('label', { class: 'check-label' },
         h('input', {
-          type: 'checkbox', checked: item.done, dataset: { focusKey: 'subtask:' + item.id },
+          type: 'checkbox', checked: item.done, dataset: { focusKey: 'criterion:' + item.id },
           onchange: (event) => editTask({
             subtasks: task.subtasks.map((other) => other.id === item.id ? { ...other, done: event.target.checked } : other)
-          }, element('subtask-feedback'))
+          }, element('criteria-feedback'))
         }), ' ', item.title),
       h('button', {
-        type: 'button', class: 'text-button', text: t('common.remove'), 'aria-label': t('detail.removeSubtask', { title: item.title }),
-        onclick: () => editTask({ subtasks: task.subtasks.filter((other) => other.id !== item.id) }, element('subtask-feedback'))
+        type: 'button', class: 'text-button', text: t('common.remove'), 'aria-label': t('detail.removeCriterion', { title: item.title }),
+        onclick: () => editTask({ subtasks: task.subtasks.filter((other) => other.id !== item.id) }, element('criteria-feedback'))
       }))));
   }
 
@@ -914,9 +913,11 @@ function renderDetail(fresh) {
   }
 
   element('review-panel').hidden = task.status !== 'completed';
-  if (!cached('detail:review', [task.review, task.criteria, task.status])) {
-    element('review-criteria').textContent = task.criteria
-      ? t('detail.reviewCriteria', { criteria: task.criteria })
+  if (!cached('detail:review', [task.review, task.subtasks, task.status])) {
+    const ticked = task.subtasks.filter((item) => item.done).length;
+    element('review-criteria').textContent = task.subtasks.length
+      ? [t('detail.reviewCriteria', { done: ticked, total: task.subtasks.length }),
+        ...task.subtasks.map((item) => `${item.done ? '✓' : '☐'} ${item.title}`)].join('\n')
       : t('detail.reviewNoCriteria');
     const form = element('review-form').elements;
     form.result.value = task.review?.result ?? 'unreviewed';
@@ -1580,6 +1581,10 @@ function renderAppReview(end) {
 // ---------------------------------------------------------------------------
 // Settings
 
+function conflictFieldLabel(field) {
+  return field === 'subtasks' || field === 'criteria' ? t('detail.criteria') : field;
+}
+
 function formatValue(field, value) {
   if (value === null || value === undefined || value === '') return t('common.empty');
   if (field === 'status') return STATUSES.includes(value) ? statusLabel(value) : value;
@@ -1618,7 +1623,7 @@ function renderSettingsLists() {
   element('conflict-list').replaceChildren(...state.conflicts.map((conflict) => {
     const owner = conflict.ref ? state.tasks.find((task) => task.id === conflict.ref)?.title ?? t('common.aTask') : t('conflict.plan');
     return h('li', { class: 'conflict' },
-      h('p', { class: 'strong', text: `${owner}: ${conflict.field}` }),
+      h('p', { class: 'strong', text: `${owner}: ${conflictFieldLabel(conflict.field)}` }),
       h('p', { text: t('conflict.thisDevice', { value: formatValue(conflict.field, conflict.local) }) }),
       h('p', { text: t('conflict.otherDevice', { value: formatValue(conflict.field, conflict.remote) }) }),
       h('div', { class: 'task-actions' },
@@ -2192,7 +2197,6 @@ function wireDetail() {
       plannedDate: fields.plannedDate.value,
       deadline: fromLocalInput(fields.deadline.value),
       nextStep: fields.nextStep.value,
-      criteria: fields.criteria.value,
       pinned: fields.pinned.checked,
       supportsMission: fields.supportsMission.checked,
       remind: { start: fields.remindStart.checked, deadline: fields.remindDeadline.checked }
@@ -2210,11 +2214,11 @@ function wireDetail() {
     editTask({ commitment: { outcome: outcome.value, committedAt: fromLocalInput(committedAt.value) } }, element('commitment-feedback'));
   });
   element('remove-commitment').addEventListener('click', () => editTask({ commitment: null }, element('commitment-feedback')));
-  element('subtask-form').addEventListener('submit', (event) => {
+  element('criteria-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const input = event.target.elements.title;
     const task = state.tasks.find((item) => item.id === currentTaskId);
-    if (editTask({ subtasks: [...task.subtasks, { title: input.value }] }, element('subtask-feedback'))) {
+    if (editTask({ subtasks: [...task.subtasks, { title: input.value }] }, element('criteria-feedback'))) {
       input.value = '';
       input.focus();
     }
@@ -2708,6 +2712,11 @@ async function boot() {
   useLanguage(detectLanguage(localStorage, navigator.languages ?? [navigator.language]));
   device = loadDevice();
   state = readState(localStorage);
+  const folded = foldAllCriteria(state, ctx());
+  if (folded !== state) {
+    state = folded;
+    saveState(localStorage, state);
+  }
   state = reconcileReminders(registerDevice(state, { ...device, platform: platformName() }));
   if (desktop?.platform === 'win32') element('windows-settings').hidden = false;
   if (desktop) element('browser-settings').hidden = false;

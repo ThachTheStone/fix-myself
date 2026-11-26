@@ -19,22 +19,41 @@ TASK-03) are unchanged.
   "`subtasks` holds the completion criteria checklist (SRS 0.8); the old text `criteria` is folded into it."
   Do not rename the key anywhere in data, sync or tests' stored shapes.
 - **Optional:** an empty array means "no criteria". No null in storage; the UI just shows the empty list.
-- **Old text `criteria`** is folded into the checklist by a new exported pure function `foldCriteria(task)`:
-  - If `task.criteria` is a non-empty string after trim: split on line breaks, trim each line, strip a leading
-    bullet (`-`, `*`, `•`, `+`, or `1.`/`1)` style numbers) and drop empty lines. A line over 160 characters is cut at
-    the last space at or before 160 (or at 160 if there is none) and the rest continues as the next item.
-  - Item ids are deterministic: `crit-` + task.id + `-` + index (0-based over the produced items), so two devices
-    folding the same text produce the same ids. Skip an item whose id already exists in `task.subtasks`.
-  - Items are appended after existing `subtasks`, `done: task.status === 'completed'`. If the total would pass 50,
-    the extra items are dropped (accepted loss; real data is a few lines).
-  - Return `{ ...task, subtasks: [...], criteria: '' }`. Do not touch `stamps` or `supersedes`. If `criteria` is
-    empty, return the task unchanged (same object). The function must be idempotent.
-- Apply `foldCriteria` to every task (a) in `migrateState` on both branches (v1 path and v2/v3 path), and (b) to every
-  task in the state returned by `mergeSync` (an older device or file can still send text `criteria`). No
-  `STATE_VERSION` or `SYNC_SCHEMA` bump. Keep `'criteria'` in `TASK_FIELDS` so old values still merge.
-- `validateChanges` case `criteria` (used by older callers and the AI action API): fold the given text into the
-  checklist of the task being edited with the same rules (ids from `foldCriteria` on the merged result) and store
-  `criteria: ''`. The result must pass the 50-item limit; if not, throw `'Add up to 50 completion criteria.'`.
+- **Old text `criteria`** is folded into the checklist. Two new exported functions in `app/model.js`:
+  - `criteriaItems(text, existing, done)` (pure): split `text` on line breaks, trim each line, strip a leading bullet
+    (`-`, `*`, `•`, `+`, or `1.`/`1)` style numbers) and drop empty lines. A line over 160 characters is cut at the
+    last space at or before 160 (or at 160 if there is none) and the rest continues as the next item. **Skip a line
+    whose normalised title (trimmed, collapsed spaces, lower-case) already exists** in `existing` or earlier in the
+    output. Item id = `crit-` + FNV-1a 32-bit hex of the normalised title + `-` + occurrence number (so the same
+    text gives the same ids on every device, and edited text never collides by index). If that id is already used
+    in `existing` or earlier in the output (e.g. the user renamed a folded item and the old text arrives again),
+    increase the occurrence number until the id is free. Returns the new items only,
+    each `{ id, title, done }`.
+  - `foldTaskCriteria(task, c)`: if `task.criteria` trimmed is empty, return the same object. Otherwise return
+    `{ ...task, subtasks: [...task.subtasks, ...criteriaItems(task.criteria, task.subtasks, task.status === 'completed')]
+    .slice(0, 50), criteria: '' }` **as a real edit**: set `stamps.subtasks` and `stamps.criteria` to `stampOf(c)` and
+    clear `supersedes.subtasks` and `supersedes.criteria`, exactly as `saveTask` stamps changed fields
+    (model.js around 788-794). Overflow past 50 is dropped (accepted; real data is a few lines). A canceled task's
+    items get `done: false`; that is fine.
+  - `foldAllCriteria(state, ctx)`: applies `foldTaskCriteria` to every task with `c = context(ctx)` (the same
+    context helper `saveTask` uses); returns the same state object when nothing changed.
+  - Why stamped: an unstamped fold leaves `subtasks` under an old stamp, so an older device's later subtask edit
+    replaces the whole list and the folded items vanish for good (and during a strict hold the unticked ones would
+    stop blocking completion). It would also make the cloud engine push back and forth with an older device.
+- Call `foldAllCriteria`: (a) in `app/main.js` right after `state = readState(localStorage)` (main.js:2406), saving
+  the state if it changed; (b) at the end of `mergeSync` on the merged state (this covers tasks new from the remote,
+  model.js around 1648); (c) at the end of `resolveConflict` (a stored `criteria` conflict can write text back,
+  model.js around 1740). Not in `migrateState` (it has no device context). No `STATE_VERSION` or `SYNC_SCHEMA` bump.
+  Keep `'criteria'` in `TASK_FIELDS` so old values still merge.
+- `validateChanges`: process the `subtasks` change first (if present), then a `criteria` change folds onto
+  `next.subtasks ?? task.subtasks` with `criteriaItems(text, list, (next.status ?? task.status) === 'completed')` and stores
+  `criteria: ''`. If the result passes 50 items, throw `'Add up to 50 completion criteria.'`. The strict-hold checks
+  in `saveTask` (unticked criteria cannot be removed, all ticked before completing) run on this final list. A line
+  that duplicates an existing item is skipped without error.
+- The sync conflict list (main.js around 1605) shows field names: map both `subtasks` and `criteria` to the
+  "Completion criteria" label.
+- Renaming an unticked criterion during a hold stays allowed (it is no weaker than ticking it); write that in the
+  architecture doc so nobody "fixes" it later.
 - `strictEligible` = `task.subtasks.length > 0 || hasActiveDescendant(...)`. Remove the `criteria` text from it
   and from `checkAncestorsNeedIt` (text is always empty after folding).
 - Completing a task outside a strict hold stays allowed with unticked criteria (unchanged behaviour). During a hold
@@ -75,7 +94,8 @@ TASK-03) are unchanged.
   say so), and the data table: note that `subtasks` stores the criteria checklist and text `criteria` is folded.
 
 ## Steps
-1. `foldCriteria` + wiring in `migrateState`, `mergeSync`, `validateChanges`; strict eligibility changes.
+1. `criteriaItems`, `foldTaskCriteria`, `foldAllCriteria`; call sites in `main.js` (after `readState`), `mergeSync`
+   and `resolveConflict` (not `migrateState`); `validateChanges`; strict eligibility changes.
 2. UI and i18n changes.
 3. Update tests: every existing test that used text `criteria` to make a task strict-eligible switches to a checklist
    item or keeps text and asserts it was folded. Update e2e lines 78 and 623 to add a criterion through the new form.
@@ -87,13 +107,28 @@ confirmation dialog when completing with unticked criteria.
 
 ## Tests that define "done"
 - New unit tests in `tests/model.test.js`:
-  - `foldCriteria`: multi-line text with bullets and blank lines; a 400-character line splits at spaces; idempotent
-    (fold twice = fold once); deterministic ids equal across two calls on copies; completed task gives `done: true`;
-    existing items kept first; overflow past 50 dropped; empty criteria returns the same object.
-  - `migrateState` of a v3 state with text criteria gives a checklist and `criteria: ''`.
-  - `mergeSync` where the remote task (older device) has newer-stamped text criteria: result has the folded items and
-    no duplicates when merged again.
-  - `saveTask(..., { criteria: 'a\nb' })` appends two items.
+  - `criteriaItems` / `foldTaskCriteria`: multi-line text with bullets and blank lines; a 400-character line splits at
+    spaces; duplicate lines (case and spacing differences) give one item; fold twice = fold once; ids equal across two
+    calls on copies; completed task gives `done: true`; existing items kept first; overflow past 50 dropped; empty
+    criteria returns the same object; the fold sets fresh stamps on `subtasks` and `criteria`, clears their
+    supersedes, and adds no timeline event.
+  - Two up-to-date devices fold the same text independently, then `mergeSync` both ways: same list, no conflict, the
+    higher stamp kept.
+  - Old-device scenario: A has folded; B (older, still has text and an empty list) then adds a subtask with a newer
+    stamp. (i) If B had merged A's fold before editing, B already holds A's list and nothing is lost. (ii) If the two
+    edits are concurrent since the last merge with that peer (set `state.peers[B].seenUntil` before both edits, so
+    `base` is not null), `mergeFields` lists a `subtasks` conflict for the user
+    (shown with the criteria label) instead of silently dropping the folded items. (iii) Repeated merges with no new
+    edits reach a fixed point: `exportSync` output is equal on both after two rounds, so the cloud engine stops pushing.
+  - An old device edits the text to `w\nx\ny` after A folded `x\ny`: merging into A adds only `w`, no duplicate.
+  - `saveTask(..., { criteria: 'a\nb' })` appends two items; a second `saveTask(..., { criteria: 'c' })` appends `c`;
+    a change with both `subtasks` and `criteria` keeps the subtasks edit and appends the criteria.
+  - During a strict hold, with `base` set and both sides edited after it, a merge that would remove unticked folded
+    items raises a conflict, keeps the local list, and completion still throws.
+  - A renamed folded item plus the old text arriving again gives distinct ids (no duplicate id in the list).
+- Docs: in the ARCHITECTURE.md known-limit update, state the existing gap: on the first merge with a peer (`base`
+  null) a newer remote list wins without a conflict, even during a hold.
+  - `resolveConflict` choosing a side with text criteria leaves the task folded.
   - A task whose only criteria came from folded text is strict-eligible (it has items); a task with an empty
     checklist and no active child is not.
 - Commands: `npm test`, `npm run build`, `git diff --check`,

@@ -74,8 +74,10 @@ test('tasks move from the inbox to a commitment, keep their deadline when blocks
   const now = new Date();
   const deadline = new Date(now.getTime() + 3 * 86_400_000);
   deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('New criterion').fill('Sent to the client');
+  await detail.getByRole('button', { name: 'Add', exact: true }).click();
+  await detail.locator('#criteria-list').getByText('Sent to the client').waitFor();
   await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
-  await detail.getByLabel('Completion criteria').fill('Sent to the client');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Saved.').waitFor();
 
@@ -527,7 +529,7 @@ test('a focus session works on a chosen task, pauses, ends with sites still bloc
   await page.getByText('Focus time:', { exact: false }).waitFor();
 });
 
-test('a strict work block holds the session, refuses completion with open subtasks, and offers an emergency exit (WB-01 to WB-04)', { timeout: 40_000 }, async (t) => {
+test('a strict work block holds the session, refuses completion with unticked criteria, and offers an emergency exit (WB-01 to WB-04)', { timeout: 40_000 }, async (t) => {
   const app = await preview({ preview: { host: '127.0.0.1', port: 0 } });
   t.after(() => app.httpServer.close());
   const page = await (await launch(t)).newPage();
@@ -539,9 +541,9 @@ test('a strict work block holds the session, refuses completion with open subtas
   await page.locator('#today-list').getByRole('link', { name: 'Write the report', exact: true }).click();
 
   const detail = page.locator('#task');
-  await detail.getByLabel('New subtask').fill('Draft the summary');
+  await detail.getByLabel('New criterion').fill('Draft the summary');
   await detail.getByRole('button', { name: 'Add', exact: true }).click();
-  await detail.getByText('Draft the summary').waitFor();
+  await detail.locator('#criteria-list').getByText('Draft the summary').waitFor();
 
   const now = new Date();
   await detail.getByLabel('Start', { exact: true }).fill(localInput(new Date(now.getTime() - 60_000)));
@@ -557,7 +559,7 @@ test('a strict work block holds the session, refuses completion with open subtas
   assert.equal(await page.getByRole('button', { name: 'End session' }).isVisible(), false);
 
   await page.getByRole('checkbox', { name: 'Complete Write the report' }).click();
-  await page.getByText('Tick every subtask before completing this task.').waitFor();
+  await page.getByText('Tick every completion criterion before completing this task.').waitFor();
 
   await page.getByRole('button', { name: 'Emergency exit' }).click();
   await page.getByText('You can exit in', { exact: false }).waitFor();
@@ -619,8 +621,10 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
   const detail = page.locator('#task');
   const deadline = new Date(Date.now() + 3 * 86_400_000);
   deadline.setHours(17, 0, 0, 0);
+  await detail.getByLabel('New criterion').fill('Report sent');
+  await detail.getByRole('button', { name: 'Add', exact: true }).click();
+  await detail.locator('#criteria-list').getByText('Report sent').waitFor();
   await detail.getByLabel('Deadline', { exact: true }).fill(localInput(deadline));
-  await detail.getByLabel('Completion criteria').fill('Report sent');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Saved.').waitFor();
   const tomorrow = new Date(Date.now() + 86_400_000);
@@ -632,6 +636,8 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
 
   await page.getByRole('link', { name: 'Calendar' }).click();
   const column = page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`);
+  // Wait for the grid before deciding whether tomorrow is off screen (today can be the last day shown).
+  await page.locator('.cal-day').first().waitFor();
   if (await column.count() === 0) await page.getByRole('button', { name: 'Next' }).click();
   await column.waitFor();
   const block = page.locator('.cal-block', { hasText: 'Plan the report' });
@@ -645,13 +651,18 @@ test('the Calendar moves a block by dragging, keeps the deadline, and creates a 
   await page.getByText('Block moved.').waitFor();
 
   await page.locator('.cal-block', { hasText: 'Plan the report' }).click();
+  // The task page renders on hashchange, after the click returns.
+  await page.locator('#detail-title', { hasText: 'Plan the report' }).waitFor();
   const shifted = new Date(tomorrow.getTime() + 2 * 3_600_000);
   assert.equal(await page.getByLabel('Block 1 start').inputValue(), localInput(shifted));
   assert.equal(await page.getByLabel('Block 1 end').inputValue(), localInput(new Date(shifted.getTime() + 3_600_000)));
   assert.equal(await detail.getByLabel('Deadline', { exact: true }).inputValue(), localInput(deadline));
 
   await page.getByRole('link', { name: 'Calendar' }).click();
-  const empty = await page.locator(`.cal-day[data-day="${localDay(tomorrow)}"]`).boundingBox();
+  await page.locator('.cal-day').first().waitFor();
+  if (await column.count() === 0) await page.getByRole('button', { name: 'Next' }).click();
+  await column.waitFor();
+  const empty = await column.boundingBox();
   const at = (hour) => empty.y + hour * 48;
   await page.mouse.move(empty.x + empty.width / 2, at(15));
   await page.mouse.down();
@@ -700,8 +711,10 @@ test('child tasks nest in the Tasks view, show their ancestors and keep a parent
   assert.equal(await list.locator('li.task').count(), 3);
 
   await list.getByRole('link', { name: 'Open Read variables' }).click();
+  await detail.locator('#detail-breadcrumb', { hasText: 'Query database' }).waitFor();
   assert.equal(await detail.locator('#detail-breadcrumb').textContent(), 'Payment module › Query database');
   await detail.locator('#detail-breadcrumb').getByRole('link', { name: 'Payment module' }).click();
+  await page.locator('#detail-title', { hasText: /^Payment module$/ }).waitFor();
   await detail.locator('#detail-input-status').selectOption('completed');
   await page.getByRole('button', { name: 'Save details' }).click();
   await page.getByText('Complete or cancel its child tasks first.').waitFor();
