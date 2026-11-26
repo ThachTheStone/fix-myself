@@ -1299,3 +1299,133 @@ test('TASK-03: an active child of a closed parent is not nested under it', () =>
   assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L3')), []);
   assert.ok(l1 && l3);
 });
+
+// ---------------------------------------------------------------------------
+// Account sync support (SYS-02, SYS-05): schema, own payloads, remote-first root, ties, clear.
+import { clearSyncedData, eraseUserData, SYNC_SCHEMA } from '../app/model.js';
+
+const PC = { id: 'pc', name: 'PC' };
+const PHONE = { id: 'phone', name: 'Phone' };
+
+test('SYS-02: exports carry the sync schema and old files without one are accepted', () => {
+  const payload = exportSync(fresh(), PC, at('2026-11-19T08:00:00Z'));
+  assert.equal(payload.schema, SYNC_SCHEMA);
+  const { schema, ...old } = payload;
+  assert.doesNotThrow(() => mergeSync(fresh(), old, ctx('2026-11-19T08:01:00Z', 'phone')));
+  assert.doesNotThrow(() => mergeSync(fresh(), { ...payload, schema: SYNC_SCHEMA + 5 }, ctx('2026-11-19T08:01:00Z', 'phone')));
+  assert.throws(() => mergeSync(fresh(), { ...payload, schema: '2' }, ctx('2026-11-19T08:01:00Z', 'phone')), /not a Fix Myself sync file/);
+  assert.throws(() => mergeSync(fresh(), { ...payload, schema: 1.5 }, ctx('2026-11-19T08:01:00Z', 'phone')), /not a Fix Myself sync file/);
+});
+
+test('SYS-02: allowOwn merges a payload this device wrote and leaves peers alone', () => {
+  const pc = captureTask(fresh(), { title: 'Mine' }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  const payload = exportSync(pc, PC, at('2026-11-19T08:01:00Z'));
+  assert.throws(() => mergeSync(fresh(), payload, ctx('2026-11-19T08:02:00Z', 'pc')), /came from this device/);
+  const merged = mergeSync(fresh(), payload, { ...ctx('2026-11-19T08:02:00Z', 'pc'), allowOwn: true });
+  assert.deepEqual(merged.state.tasks.map((task) => task.title), ['Mine']);
+  assert.deepEqual(merged.state.peers, {});
+  const other = mergeSync(fresh(), payload, { ...ctx('2026-11-19T08:02:00Z', 'phone'), allowOwn: true });
+  assert.equal(other.state.peers.pc.seenUntil, payload.exportedAt, 'a payload from another device still records the peer');
+});
+
+test('SYS-02: preferRemoteRoot gives the remote copy every root value, even against a newer local stamp', () => {
+  const rule = { name: 'Social', domains: ['youtube.com'], enabled: true };
+  const remote = saveBlockRule(fresh(), null, rule, ctx('2026-11-19T08:00:00Z', 'phone'));
+  const payload = exportSync(remote, PHONE, at('2026-11-19T08:01:00Z'));
+  let local = saveBlockRule(fresh(), null, { ...rule, name: 'Local only' }, ctx('2026-11-19T09:00:00Z', 'pc'));
+  local = captureTask(local, { title: 'Local task' }, ctx('2026-11-19T09:00:00Z', 'pc'));
+  const normal = mergeSync(local, payload, ctx('2026-11-19T09:01:00Z', 'pc')).state;
+  assert.equal(normal.blockRules[0].name, 'Local only', 'normal merge keeps the newer local rules');
+  const forced = mergeSync(local, payload, { ...ctx('2026-11-19T09:01:00Z', 'pc'), preferRemoteRoot: true }).state;
+  assert.deepEqual(forced.blockRules, remote.blockRules);
+  assert.deepEqual(forced.tasks.map((task) => task.title), ['Local task'], 'tasks still merge as usual');
+});
+
+test('A-10: a conflict another device already resolved is dropped on merge', () => {
+  let pc = captureTask(fresh(), { title: 'Shared' }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  let phone = mergeSync(fresh(), exportSync(pc, PC, at('2026-11-19T08:01:00Z')), ctx('2026-11-19T08:02:00Z', 'phone')).state;
+  pc = mergeSync(pc, exportSync(phone, PHONE, at('2026-11-19T08:03:00Z')), ctx('2026-11-19T08:04:00Z', 'pc')).state;
+  const id = pc.tasks[0].id;
+  pc = saveTask(pc, id, { title: 'From PC' }, ctx('2026-11-19T09:00:00Z', 'pc'));
+  phone = saveTask(phone, id, { title: 'From phone' }, ctx('2026-11-19T09:05:00Z', 'phone'));
+  pc = mergeSync(pc, exportSync(phone, PHONE, at('2026-11-19T10:00:00Z')), ctx('2026-11-19T10:01:00Z', 'pc')).state;
+  phone = mergeSync(phone, exportSync(pc, PC, at('2026-11-19T10:02:00Z')), ctx('2026-11-19T10:03:00Z', 'phone')).state;
+  assert.equal(pc.conflicts.length, 1);
+  assert.equal(phone.conflicts.length, 1);
+  phone = resolveConflict(phone, phone.conflicts[0].id, 'local', ctx('2026-11-19T10:04:00Z', 'phone'));
+  pc = mergeSync(pc, exportSync(phone, PHONE, at('2026-11-19T10:05:00Z')), ctx('2026-11-19T10:06:00Z', 'pc')).state;
+  assert.equal(pc.conflicts.length, 0, 'resolved on the phone, so resolved here');
+  assert.equal(pc.tasks[0].title, 'From phone');
+});
+
+test('SYS-02: ties break the same way on every device', () => {
+  let pc = captureTask(fresh(), { title: 'Same task', deadline: '2026-11-25T10:00:00Z' }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  let phone = mergeSync(fresh(), exportSync(pc, PC, at('2026-11-19T08:01:00Z')), ctx('2026-11-19T08:02:00Z', 'phone')).state;
+  const id = pc.tasks[0].id;
+  pc = toggleTask(pc, id, ctx('2026-11-19T09:00:00Z', 'pc'));
+  phone = toggleTask(phone, id, ctx('2026-11-19T09:30:00Z', 'phone'));
+  const a = mergeSync(pc, exportSync(phone, PHONE, at('2026-11-19T10:00:00Z')), ctx('2026-11-19T10:01:00Z', 'pc')).state;
+  const b = mergeSync(phone, exportSync(pc, PC, at('2026-11-19T10:00:00Z')), ctx('2026-11-19T10:02:00Z', 'phone')).state;
+  assert.equal(a.tasks[0].completedAt, b.tasks[0].completedAt);
+  assert.equal(a.tasks[0].completedAt, pc.tasks[0].completedAt, 'the earliest completion wins');
+  // originalDeadline takes the earliest non-null value.
+  const early = { ...pc, tasks: pc.tasks.map((task) => ({ ...task, originalDeadline: '2026-11-20T00:00:00.000Z' })) };
+  const late = { ...phone, tasks: phone.tasks.map((task) => ({ ...task, originalDeadline: '2026-11-22T00:00:00.000Z' })) };
+  const x = mergeSync(early, exportSync(late, PHONE, at('2026-11-19T11:00:00Z')), ctx('2026-11-19T11:01:00Z', 'pc')).state;
+  const y = mergeSync(late, exportSync(early, PC, at('2026-11-19T11:00:00Z')), ctx('2026-11-19T11:02:00Z', 'phone')).state;
+  assert.equal(x.tasks[0].originalDeadline, '2026-11-20T00:00:00.000Z');
+  assert.equal(y.tasks[0].originalDeadline, '2026-11-20T00:00:00.000Z');
+  // Workouts with equal updatedAt take the copy whose canonical JSON is greater.
+  let w1 = saveWorkout(fresh(), { date: '2026-11-19', type: 'Run', minutes: 30 }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  const workoutId = w1.workouts[0].id;
+  let w2 = mergeSync(fresh(), exportSync(w1, PC, at('2026-11-19T08:01:00Z')), ctx('2026-11-19T08:02:00Z', 'phone')).state;
+  w1 = { ...w1, workouts: w1.workouts.map((item) => ({ ...item, minutes: 31 })) };
+  w2 = { ...w2, workouts: w2.workouts.map((item) => ({ ...item, minutes: 45 })) };
+  const m1 = mergeSync(w1, exportSync(w2, PHONE, at('2026-11-19T09:00:00Z')), ctx('2026-11-19T09:01:00Z', 'pc')).state;
+  const m2 = mergeSync(w2, exportSync(w1, PC, at('2026-11-19T09:00:00Z')), ctx('2026-11-19T09:02:00Z', 'phone')).state;
+  assert.equal(m1.workouts.find((item) => item.id === workoutId).minutes, 45);
+  assert.equal(m2.workouts.find((item) => item.id === workoutId).minutes, 45);
+});
+
+test('SYS-05: clearSyncedData resets synced fields and keeps device-local ones', () => {
+  const T = '2026-11-19T10:05:00Z';
+  let state = captureTask(fresh(), {
+    title: 'Write', subtasks: [{ id: 's1', title: 'Draft', done: false }], workBlocks: [BLOCK], remind: { start: true, deadline: false }
+  }, ctx(T0));
+  state = saveWorkout(state, { date: '2026-11-19', type: 'Run', minutes: 30 }, ctx(T0));
+  state = saveBlockRule(state, null, { name: 'Social', domains: ['youtube.com'], enabled: true }, ctx(T0));
+  state = setNextAction(state, state.tasks[0].id, ctx(T0));
+  state = tickStrict(state, ctx(T));
+  state = { ...state, lastLoginDay: '2026-11-19', chrome: { profiles: { p: { id: 'p' } } }, peers: { x: { name: 'X' } },
+    conflicts: [{ id: 'c' }], appActivity: { days: { d: 1 }, reasons: [] } };
+  const focus = state.focus;
+  assert.ok(focus?.strict, 'a strict hold is running');
+  const cleared = clearSyncedData(state, at(T));
+  for (const field of ['tasks', 'workouts', 'blockRules', 'pendingRuleChanges', 'appPresets', 'pendingBlockChanges', 'focusSegments', 'strictLog', 'conflicts']) {
+    assert.deepEqual(cleared[field], [], field);
+  }
+  for (const field of ['deleted', 'stamps', 'supersedes', 'devices', 'peers', 'reminders']) assert.deepEqual(cleared[field], {}, field);
+  assert.equal(cleared.mission, '');
+  assert.equal(cleared.nextActionId, null);
+  assert.deepEqual(cleared.focus, { ...focus, taskId: null });
+  assert.deepEqual(cleared.chrome, state.chrome);
+  assert.deepEqual(cleared.appActivity, state.appActivity);
+  assert.equal(cleared.lastLoginDay, '2026-11-19');
+  assert.deepEqual(cleared.preferences, state.preferences);
+  assert.deepEqual(cleared.settings, state.settings);
+  // The held task is gone, so tickStrict clears the hold through its missing-task path.
+  assert.equal(tickStrict(cleared, ctx(T)).focus.strict, null);
+});
+
+test('SYS-05: a plain erase refuses during a focus session or strict hold', () => {
+  const T = '2026-11-19T10:05:00Z';
+  const idle = fresh();
+  assert.doesNotThrow(() => eraseUserData(idle, at(T).getTime()));
+  const running = startFocus(captureTask(idle, { title: 'x' }, ctx(T0)), at(T));
+  assert.throws(() => eraseUserData(running, at(T).getTime()), /Erase after the focus session ends\./);
+  const ended = endFocus(running, ctx(T));
+  assert.throws(() => eraseUserData(ended, at(T).getTime() + 1000), /Erase after the focus session ends\./, 'blocking outlasts an ended session');
+  assert.doesNotThrow(() => eraseUserData(running, at(T).getTime() + 24 * 3_600_000));
+  const held = { ...idle, focus: { sessionId: 's', taskId: null, endAt: 1, blockUntil: 1, endedAt: 1, strict: { blockId: 'b', taskId: 't' } } };
+  assert.throws(() => eraseUserData(held, at(T).getTime()), /Erase after the focus session ends\./);
+});

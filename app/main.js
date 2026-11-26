@@ -2362,10 +2362,17 @@ function wireSettings() {
   });
   element('erase-data').addEventListener('click', (event) => {
     confirmTwice(event.currentTarget, 'settings.erase', async () => {
+      let erased;
+      try {
+        erased = eraseUserData(state);
+      } catch (error) {
+        element('data-feedback').textContent = translateError(error.message);
+        return;
+      }
       await clearPhotos().catch(reportError);
       photoUrls.clear();
       sectionCache.clear();
-      applyState(registerDevice(eraseUserData(state), { ...device, platform: platformName() }));
+      applyState(registerDevice(erased, { ...device, platform: platformName() }));
       element('data-feedback').textContent = t('settings.erased');
     });
   });

@@ -9,6 +9,7 @@ export const STATUSES = ['open', 'in_progress', 'completed', 'canceled'];
 export const STATUS_LABELS = { open: 'Open', in_progress: 'In progress', completed: 'Completed', canceled: 'Canceled' };
 export const MAX_PRIORITIES = 3;
 export const SYNC_FORMAT = 'fix-myself-sync';
+export const SYNC_SCHEMA = 2;
 
 // Block rules (BLK-01 to BLK-06).
 export const MAX_BLOCK_RULES = 20;
@@ -1466,6 +1467,7 @@ export function exportSync(state, device, now = new Date()) {
   return {
     format: SYNC_FORMAT,
     version: 1,
+    schema: SYNC_SCHEMA,
     deviceId: device.id,
     deviceName: device.name,
     exportedAt: now.toISOString(),
@@ -1506,6 +1508,9 @@ function validSyncedLinks(links) {
 function validatePayload(payload) {
   if (payload?.format !== SYNC_FORMAT || payload.version !== 1 || typeof payload.deviceId !== 'string'
       || typeof payload.exportedAt !== 'string' || !Array.isArray(payload.data?.tasks)) {
+    throw new Error('This file is not a Fix Myself sync file.');
+  }
+  if (payload.schema !== undefined && !Number.isInteger(payload.schema)) {
     throw new Error('This file is not a Fix Myself sync file.');
   }
   for (const task of payload.data.tasks) {
@@ -1590,10 +1595,26 @@ function mergeFields(local, remote, fields, base, ref, conflicts) {
   return { record: out, changed };
 }
 
+const earliest = (a, b) => (a && b ? (a <= b ? a : b) : a ?? b ?? null);
+
+function stableJson(value) {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') {
+    return '{' + Object.keys(value).sort().filter((key) => value[key] !== undefined)
+      .map((key) => JSON.stringify(key) + ':' + stableJson(value[key])).join(',') + '}';
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+const syncedWorkout = ({ photoId, ...workout }) => ({ ...workout, hasPhoto: Boolean(photoId || workout.hasPhoto) });
+
+// ctx.allowOwn merges a payload this device wrote (the account copy) and leaves
+// peers alone for it; ctx.preferRemoteRoot lets the remote copy win every root field.
 export function mergeSync(state, payload, ctx) {
   validatePayload(payload);
   const c = context(ctx);
-  if (payload.deviceId === c.device) throw new Error('This sync file came from this device.');
+  const own = payload.deviceId === c.device;
+  if (own && ctx?.allowOwn !== true) throw new Error('This sync file came from this device.');
   const remote = payload.data;
   const base = state.peers[payload.deviceId]?.seenUntil ?? null;
   const deleted = { ...state.deleted, ...remote.deleted };
@@ -1616,8 +1637,8 @@ export function mergeSync(state, payload, ctx) {
     const { record, changed } = mergeFields(task, other, TASK_FIELDS, base, task.id, conflicts);
     const events = new Map([...task.events, ...(other.events ?? [])].map((item) => [item.id, item]));
     record.events = [...events.values()].sort((a, b) => a.at.localeCompare(b.at));
-    record.originalDeadline = task.originalDeadline ?? other.originalDeadline ?? record.deadline;
-    if (record.status === 'completed') record.completedAt = task.completedAt ?? other.completedAt ?? c.at;
+    record.originalDeadline = earliest(task.originalDeadline, other.originalDeadline) ?? record.deadline;
+    if (record.status === 'completed') record.completedAt = earliest(task.completedAt, other.completedAt) ?? c.at;
     else record.completedAt = null;
     if (changed || record.events.length !== task.events.length) summary.updated += 1;
     tasks.push(record);
@@ -1628,6 +1649,7 @@ export function mergeSync(state, payload, ctx) {
     summary.added += 1;
   }
 
+  const remoteRoot = ctx?.preferRemoteRoot === true;
   const rootLocal = {
     mission: state.mission,
     nextActionId: state.nextActionId,
@@ -1636,8 +1658,8 @@ export function mergeSync(state, payload, ctx) {
     pendingRuleChanges: state.pendingRuleChanges ?? [],
     appPresets: state.appPresets ?? [],
     pendingBlockChanges: state.pendingBlockChanges ?? [],
-    stamps: state.stamps,
-    supersedes: state.supersedes
+    stamps: remoteRoot ? {} : state.stamps,
+    supersedes: remoteRoot ? {} : state.supersedes
   };
   const { record: root } = mergeFields(rootLocal, remote, ROOT_FIELDS, base, null, conflicts);
 
@@ -1645,9 +1667,10 @@ export function mergeSync(state, payload, ctx) {
   for (const workout of remote.workouts ?? []) {
     if (deleted[workout.id]) continue;
     const mine = workouts.get(workout.id);
-    if (!mine || (workout.updatedAt ?? '') > (mine.updatedAt ?? '')) {
-      workouts.set(workout.id, { ...workout, photoId: mine?.photoId ?? null });
-    }
+    const newer = !mine || (workout.updatedAt ?? '') > (mine.updatedAt ?? '');
+    const tied = mine && (workout.updatedAt ?? '') === (mine.updatedAt ?? '')
+      && stableJson(workout) > stableJson(syncedWorkout(mine));
+    if (newer || tied) workouts.set(workout.id, { ...workout, photoId: mine?.photoId ?? null });
   }
 
   const segments = new Map();
@@ -1668,7 +1691,13 @@ export function mergeSync(state, payload, ctx) {
   }
 
   const fresh = new Set(conflicts.map((conflict) => conflict.id));
-  const keptConflicts = state.conflicts.filter((conflict) => !fresh.has(conflict.id) && !deleted[conflict.ref]);
+  const resolvedElsewhere = (conflict) => {
+    const record = conflict.ref === null ? root : tasks.find((task) => task.id === conflict.ref);
+    const list = record?.supersedes?.[conflict.field];
+    return Boolean(list?.includes(conflict.localStamp) && list.includes(conflict.remoteStamp));
+  };
+  const keptConflicts = state.conflicts
+    .filter((conflict) => !fresh.has(conflict.id) && !deleted[conflict.ref] && !resolvedElsewhere(conflict));
   summary.conflicts = conflicts.length;
   let next = {
     ...state,
@@ -1680,7 +1709,7 @@ export function mergeSync(state, payload, ctx) {
     deleted,
     devices,
     conflicts: [...keptConflicts, ...conflicts],
-    peers: { ...state.peers, [payload.deviceId]: { name: payload.deviceName ?? null, seenUntil: payload.exportedAt, mergedAt: c.at } }
+    peers: own ? state.peers : { ...state.peers, [payload.deviceId]: { name: payload.deviceName ?? null, seenUntil: payload.exportedAt, mergedAt: c.at } }
   };
   const effective = effectiveParents(next);
   summary.repaired = next.tasks.filter((task) => storedParent(task) !== (effective.get(task.id) ?? null)).length;
@@ -1717,9 +1746,25 @@ export function resolveConflict(state, conflictId, choice, ctx) {
   return reconcileReminders({ ...state, tasks, conflicts }, c.now);
 }
 
-export function eraseUserData(state) {
+const holdsSession = (state, now) => isFocused(state.focus, now) || Boolean(state.focus?.strict);
+
+export function eraseUserData(state, now = Date.now()) {
+  if (holdsSession(state, now)) throw new Error('Erase after the focus session ends.');
   const fresh = defaultState();
   return { ...fresh, preferences: state.preferences, settings: state.settings };
+}
+
+// Resets what exportSync writes and keeps every device-local field. Used when a
+// device takes another account's copy or when an erase marker arrives.
+export function clearSyncedData(state, now = new Date()) {
+  const fresh = defaultState();
+  const next = { ...state };
+  for (const field of ['mission', 'nextActionId', 'tasks', 'workouts', 'deleted', 'stamps', 'supersedes', 'devices',
+    'blockRules', 'pendingRuleChanges', 'appPresets', 'pendingBlockChanges', 'focusSegments', 'strictLog', 'conflicts', 'peers']) {
+    next[field] = fresh[field];
+  }
+  if (next.focus?.taskId != null) next.focus = { ...next.focus, taskId: null };
+  return reconcileReminders(next, now);
 }
 
 // ---------------------------------------------------------------------------
