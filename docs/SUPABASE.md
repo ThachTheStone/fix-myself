@@ -19,8 +19,10 @@ Chrome và hoạt động app, vị trí đồng hồ nổi, mã ghép nối Chr
    → **Run**. Chạy lại không sao.
 3. **Authentication → Sign In / Providers → Email**: bật **Email**, giữ nguyên các tùy chọn khác. Tên các mục trong
    trang quản trị Supabase có thể khác đôi chút theo phiên bản.
-4. **Authentication → Emails**: sửa **cả hai** mẫu **Magic Link** và **Confirm signup** thành một dòng có mã, ví dụ
-   `Mã đăng nhập Fix Myself: {{ .Token }}`. Lần đăng nhập đầu tiên của một email mới dùng mẫu Confirm signup, các lần
+4. **Authentication → Emails**: sửa **cả hai** mẫu **Magic Link** và **Confirm signup** để gửi mã. Dán nguyên nội dung
+   [supabase/templates/magic-link.html](../supabase/templates/magic-link.html) và
+   [supabase/templates/confirm-signup.html](../supabase/templates/confirm-signup.html) vào ô nội dung (Message body),
+   và dùng dòng tiêu đề ghi ở đầu mỗi file. Bản tối thiểu cũng được: một dòng `Mã đăng nhập Fix Myself: {{ .Token }}`. Lần đăng nhập đầu tiên của một email mới dùng mẫu Confirm signup, các lần
    sau dùng Magic Link. App desktop và Android không mở link đăng nhập, nên email phải gửi mã. Độ dài mã (mặc định 6
    số) nằm trong cài đặt Email OTP; app nhận mã từ 6 đến 10 số.
 5. **Project Settings → API Keys** (hoặc **API**): chép **Project URL** và một trong hai khóa công khai:

@@ -86,6 +86,9 @@ part 2. Erasing while signed in uses the engine's erase marker.
   - Both erase paths delete the backup record (SYS-05).
 
 **Panel** (a new `<section id="cloud">` above `#sync` in Settings)
+- Exact labels, because the sign-in emails in `supabase/templates/` refer to them:
+  - the panel heading is "Account sync", and "Đồng bộ tài khoản" in Vietnamese;
+  - the code field label is "Code", and "Mã" in Vietnamese.
 - **Not configured.** Show:
   - a help line, "Set up a Supabase project first; see docs/SUPABASE.md";
   - Project URL and anon key fields;
