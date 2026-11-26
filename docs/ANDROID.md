@@ -8,7 +8,7 @@ Quyết định ngày 2026-11-25: Windows là nơi lập kế hoạch và làm v
 
 | Điện thoại làm | Để lại cho Windows |
 |---|---|
-| Dashboard năng suất: thời gian focus theo task, thời gian wandering, review tuần (FOC-11, REV-01, REV-03) | Lập kế hoạch chi tiết: work block, subtask, sửa lịch (PLAN-02) |
+| Dashboard năng suất: thời gian focus theo task, thời gian wandering, review tuần (FOC-11, REV-01, REV-03) | Lập kế hoạch chi tiết: work block, tiêu chí hoàn thành, sửa lịch (PLAN-02) |
 | Xem lịch work block, không sửa (PLAN-01) | Không gian làm việc của task (WS-01 đến WS-05) |
 | Nhận nhắc nhở và thông báo (REM-01, REM-02) | Preset app, quy tắc chặn, đồng hồ nổi (APP, BLK, FOC-12) |
 | Ghi nhanh việc vào inbox (TASK-01) | Work block nghiêm ngặt (WB-01 đến WB-04) |
