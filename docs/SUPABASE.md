@@ -23,9 +23,13 @@ Chrome và hoạt động app, vị trí đồng hồ nổi, mã ghép nối Chr
    `Mã đăng nhập Fix Myself: {{ .Token }}`. Lần đăng nhập đầu tiên của một email mới dùng mẫu Confirm signup, các lần
    sau dùng Magic Link. App desktop và Android không mở link đăng nhập, nên email phải gửi mã. Độ dài mã (mặc định 6
    số) nằm trong cài đặt Email OTP; app nhận mã từ 6 đến 10 số.
-5. **Project Settings → API**: chép **Project URL** và khóa **anon public** gửi cho agent (hoặc dán vào Settings của
-   app khi tính năng có). Khóa anon được thiết kế để nằm trong app; quyền truy cập dữ liệu do Row Level Security giới hạn
-   ở tài khoản của bạn. **Không** gửi khóa `service_role`.
+5. **Project Settings → API Keys** (hoặc **API**): chép **Project URL** và một trong hai khóa công khai:
+   - khóa **publishable** (bắt đầu bằng `sb_publishable_`), có ở các project tạo từ 2025; hoặc
+   - khóa **anon public** (một chuỗi JWT dài), ở mục legacy.
+
+   Gửi cho agent, hoặc dán vào Settings của app khi tính năng có. Khóa công khai được thiết kế để nằm trong app;
+   quyền truy cập dữ liệu do Row Level Security giới hạn ở tài khoản của bạn. **Không bao giờ** gửi khóa **secret**
+   (`sb_secret_…`) hay `service_role`; app cũng từ chối hai loại này.
 6. **Sau khi mọi thiết bị đã đăng nhập**: **Authentication → Sign In / Providers** → tắt **Allow new users to sign up**.
    Khóa anon nằm trong file cài, nên nếu để mở, ai có file cài cũng tạo được tài khoản trong project của bạn. Họ không đọc
    được dữ liệu của bạn, nhưng dùng được hạn mức email và dung lượng. Khi thêm thiết bị mới bằng một email đã có, không
