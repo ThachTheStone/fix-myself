@@ -111,6 +111,10 @@ part 2. Erasing while signed in uses the engine's erase marker.
     - `server`: "Sync failed: {message}"
     - `paused`: "The Supabase project may be paused. Open the Supabase dashboard to resume it."
     - `loop`: "Sync stopped repeating itself. Make any change to try again."
+    - `protected`: "Turn off block rules and strict blocks on this device first; the change delay applies." Show it next
+      to the link or erase prompt, which stays open.
+    - `backup`: "Could not save a copy of this device's plan, so nothing was replaced: {message}"
+  - The engine's messages are in English. Always translate by `code`, never by the message text.
   - `clock-skew`, shown in addition to the status: "This device's clock is {minutes} minutes off. Fix the clock so edits
     merge in the right order."
 - **Prompts** (`role="alert"`, inside the panel, never as browser dialogs):

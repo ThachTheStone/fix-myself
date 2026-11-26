@@ -9,6 +9,7 @@ A local-first planner and focus timer for Windows 11 and Android. Set a mission,
 - [Development and handoff workflow](docs/WORKFLOW.md)
 - [Device acceptance checklist](docs/ACCEPTANCE.md)
 - [Multi-agent workflow](docs/MULTI_AGENT.md): worker roles, brief template, `scripts/dispatch-cline.sh`, and the [run log](docs/agent-runs.md)
+- [Android status and plan](docs/ANDROID.md) and [Supabase setup for account sync](docs/SUPABASE.md)
 
 ## Run the planner
 
@@ -60,7 +61,7 @@ Open **Calendar** to see work blocks in a week grid (Monday first) or a day grid
 
 **Settings → Block rules** keeps sites closed outside focus sessions. Name a rule, list its sites as domains (one per line, up to 30), and choose a schedule: **Always**, or **Scheduled** with time windows on the days you pick. Times follow the planning time zone, and a window that crosses midnight belongs to the day it starts. Under **When a listed site opens**, **Block it** sends the page straight to the intervention page, while **Pause, then allow a pass** counts down first and then opens a pass for a few minutes.
 
-A weaker change — turning a rule off, removing sites, shortening a window, switching from Block to Pause, or a longer pass — waits for **Wait before a weaker change applies** (10 minutes by default, or up to the start of the next day). The saved rule keeps running, the edit shows under **Waiting to apply**, and **Cancel** drops it. Strengthening changes apply at once, and a longer wait applies immediately while a shorter one also waits.
+A weaker change — turning a rule off, removing sites, shortening a window, switching from Block to Pause, a longer pass, or changing the planning time zone while rules or strict blocks depend on it — waits for **Wait before a weaker change applies** (10 minutes by default, or up to the start of the next day). The saved rule keeps running, the edit shows under **Waiting to apply**, and **Cancel** drops it. Strengthening changes apply at once, and a longer wait applies immediately while a shorter one also waits.
 
 The extension evaluates the schedules itself on a 30-second alarm, so a rule still applies when the desktop app is closed or Chrome starts without it. **Review** lists, per site, how many visits a rule blocked or paused and how many passes you took, with the busiest hours and the reasons you entered for passes. Those counts stay separate from focus-session attempts.
 

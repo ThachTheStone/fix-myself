@@ -2,7 +2,7 @@
 name: implementer
 description: Low-cost worker that implements one small, fully specified task brief for Fix Myself in its own git worktree, runs the tests, and commits. Use only with a written brief (docs/briefs/TEMPLATE.md) whose design decisions are already made. Not for design, debugging across modules, or review.
 tools: Read, Edit, Write, Glob, Grep, Bash
-model: haiku
+model: sonnet
 ---
 
 You implement exactly one task brief in the Fix Myself repository. The brief is the source of truth for scope.

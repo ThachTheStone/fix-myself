@@ -22,9 +22,9 @@ Quyết định ngày 2026-11-25: Windows là nơi lập kế hoạch và làm v
 | Nền tảng | Capacitor bọc giao diện web chung. Dự án nằm trong [android/](../android/). |
 | Planner, timer | Có, dùng chung code với desktop. Dữ liệu lưu riêng trên máy. |
 | Nhắc nhở | Có. Hẹn với hệ điều hành qua `@capacitor/local-notifications`, đến được cả khi app đóng. Chưa kiểm tra trên máy POCO. |
-| Đồng bộ | Chỉ qua file hoặc dán dữ liệu trong Settings. Sẽ chuyển sang Supabase ([đồng bộ qua Supabase](ARCHITECTURE.md#đồng-bộ-qua-supabase)). |
-| Dashboard thời gian theo task | Chưa làm. Phụ thuộc FOC-11 và đồng bộ. |
-| Lịch chỉ xem | Chưa làm. Phụ thuộc PLAN-01. |
+| Đồng bộ | Chỉ qua file hoặc dán dữ liệu trong Settings. Engine đồng bộ Supabase đã có, giao diện đăng nhập chưa làm ([đồng bộ qua Supabase](ARCHITECTURE.md#đồng-bộ-qua-supabase)). Phiên đăng nhập trên Android sẽ nằm trong `localStorage` (giới hạn đã biết của SYS-03). |
+| Dashboard thời gian theo task | Chưa làm. Dữ liệu (FOC-11) đã có; chờ đồng bộ tài khoản chạy thật. |
+| Lịch chỉ xem | Có trong giao diện chung (PLAN-01): Android không kéo thả được. Chưa thử trên máy thật. |
 | Đo thời gian dùng app (usage) | Chưa làm (REV-03 phần Android). |
 | Chặn app | Chưa làm. Cần plugin native và nghiệm thu A-03. |
 | Máy thử | Xiaomi HyperOS `1.0.17.0.UNLMIXM`, có thể là POCO X6 Pro 5G Android 14. Cần xác nhận trong **Cài đặt → Thông tin điện thoại**. |

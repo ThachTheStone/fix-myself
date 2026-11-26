@@ -8,7 +8,7 @@ Cline với DeepSeek). Mục tiêu là giảm chi phí cho mỗi việc hoàn th
 | Vai trò | Ai đảm nhận | Việc làm |
 |---|---|---|
 | Điều phối | Claude Opus (phiên chính) | Chia việc, quyết định thiết kế, viết brief, nghiệm thu, merge. Giữ phần khó: đồng bộ, múi giờ, bảo mật bridge, gỡ lỗi nhiều module. |
-| Worker Claude | Subagent `implementer` ([.claude/agents/implementer.md](../.claude/agents/implementer.md), Haiku) | Làm một brief trong worktree riêng, chạy test, commit. |
+| Worker Claude | Subagent `implementer` ([.claude/agents/implementer.md](../.claude/agents/implementer.md), Sonnet) | Làm một brief trong worktree riêng, chạy test, commit. Từ 2026-11-25 mọi lượt dùng Sonnet; Haiku chỉ hợp với brief rất nhỏ (1 file). |
 | Worker Cline | Cline CLI với DeepSeek qua [scripts/dispatch-cline.sh](../scripts/dispatch-cline.sh) | Như worker Claude, chạy ngoài phiên Claude Code. Mã nguồn được gửi tới DeepSeek. |
 | Review | Subagent `reviewer` ([.claude/agents/reviewer.md](../.claude/agents/reviewer.md), Sonnet) | Chỉ đọc. So nhánh của worker với brief và SRS, chạy test, báo lỗi theo mức độ. |
 | Phản biện | Subagent `critic` ([.claude/agents/critic.md](../.claude/agents/critic.md), Opus) | Chỉ đọc. Phản biện đề xuất của người dùng và của điều phối, thay đổi SRS và brief trước khi giao worker. Tìm mâu thuẫn, kẽ hở và lựa chọn còn bỏ ngỏ. Không soát code từng dòng; việc đó là của reviewer. |
@@ -23,7 +23,9 @@ Giao khi việc thỏa cả bốn điều:
 - Sai sót được phát hiện bằng test hoặc review trước khi merge.
 
 Giữ ở điều phối: thiết kế, logic đồng bộ và lịch chặn, bảo mật bridge và extension, gỡ lỗi xuyên module, review cuối.
-Worker thất bại hai vòng liên tiếp trên cùng một brief thì điều phối nhận lại hoặc chuyển sang Sonnet.
+Ngoại lệ đã dùng: một module đồng bộ thuần (ví dụ `app/cloud-sync.js`) được giao cho Sonnet khi brief đã qua critic hai
+vòng và có bộ test với server giả; điều phối vẫn tự sửa các lỗi đụng cam kết lõi.
+Worker thất bại hai vòng liên tiếp trên cùng một brief, hoặc chạm giới hạn sử dụng giữa chừng, thì điều phối nhận lại.
 
 ## Luồng làm việc
 
@@ -34,16 +36,21 @@ Worker thất bại hai vòng liên tiếp trên cùng một brief thì điều 
    câu thuộc quyền quyết định của họ. Dùng lại cùng một critic trong một phiên (SendMessage) để khỏi đọc lại tài liệu từ
    đầu.
 3. **Giao việc.**
-   - Worker Claude: điều phối gọi subagent `implementer` với `isolation: worktree` và đường dẫn brief.
+   - Worker Claude: điều phối tạo worktree tay (`git worktree add -b agent/<task> ../fix-myselt-<task> <commit>`) rồi gọi
+     subagent `implementer` với đường dẫn tuyệt đối của worktree và brief. Không dùng `isolation: worktree`: công cụ từ
+     chối khi ổ đĩa lệch chữ hoa thường (`d:` và `D:`). Worktree mới cần `npm ci`.
    - Worker Cline: `scripts/dispatch-cline.sh <task> docs/briefs/<task>.md [base-ref]`. Script tạo worktree
      `../fix-myselt-<task>` trên nhánh `agent/<task>`, chạy Cline, rồi chạy kiểm tra và ghi báo cáo vào
      `.agent-runs/<task>/`. Chạy lại cùng `<task>` sẽ dùng lại worktree cho vòng sửa tiếp theo.
 4. **Kiểm tra tự động.** Unit test, build, `git diff --check` và browser test (trừ test extension Chrome, vì cổng
    `127.0.0.1:42631` có thể đang do app desktop giữ).
 5. **Review.** Subagent `reviewer` cho việc trung bình trở lên; điều phối luôn đọc phần rủi ro.
-6. **Sửa.** Gửi lại worker với brief hẹp `docs/briefs/<task>-fix-N.md`, hoặc điều phối tự sửa nếu nhỏ và khó.
+6. **Sửa.** Gửi danh sách sửa cho chính worker cũ qua SendMessage (nó còn ngữ cảnh), hoặc điều phối tự sửa nếu nhỏ,
+   khó, hoặc lỗi nằm ở brief. Bản sửa đụng cam kết lõi được reviewer hoặc critic soát lại trước khi merge.
 7. **Ghi kết quả** vào [docs/agent-runs.md](agent-runs.md): worker, số vòng, kết quả test, lỗi review, chi phí ước tính.
-8. **Merge** vào nhánh làm việc sau khi người dùng đồng ý. Không push nhánh `agent/*` trừ khi người dùng yêu cầu.
+8. **Merge** vào nhánh làm việc khi người dùng đã đồng ý hoặc đã ủy quyền, chạy lại test trên nhánh đã merge, xóa
+   worktree và nhánh `agent/*`, rồi **push nhánh làm việc**. Không push nhánh `agent/*` trừ khi người dùng yêu cầu.
+   Quy trình đầy đủ với người dùng: [WORKFLOW.md](WORKFLOW.md#vòng-làm-việc-giữa-người-dùng-và-agent).
 
 ## Quy tắc bắt buộc cho worker
 
