@@ -71,6 +71,8 @@ function validPassReasons(value) {
 // A Chrome profile reports only daily blocked-attempt totals per domain, the
 // block rule activity for those days, and the days it was running, so the
 // desktop app can show coverage and trends.
+const VERSION = /^\d{1,5}(\.\d{1,5}){0,3}$/;
+
 function validReport(report) {
   if (!report || typeof report !== 'object' || !PROFILE.test(report.profileId)) return null;
   const name = typeof report.profileName === 'string' ? report.profileName.trim().slice(0, 60) : '';
@@ -90,9 +92,11 @@ function validReport(report) {
   const ruleEvents = validRuleEvents(report.ruleEvents);
   const passReasons = validPassReasons(report.passReasons);
   if (!ruleEvents || !passReasons) return null;
+  if (report.version !== undefined && (typeof report.version !== 'string' || !VERSION.test(report.version))) return null;
   return {
     profileId: report.profileId,
     profileName: name || 'Chrome profile',
+    version: report.version ?? null,
     attempts: clean,
     activeDays: [...activeDays],
     ruleEvents,

@@ -118,7 +118,13 @@ test('block rule activity is validated before the desktop app stores it (BLK-10)
   };
   const passReasons = { '2026-11-19': [{ host: 'youtube.com', hour: 21, reason: 'Watching a lecture' }] };
   assert.deepEqual(bridge.validReport({ ...baseReport, ruleEvents, passReasons }),
-    { ...baseReport, ruleEvents, passReasons });
+    { ...baseReport, version: null, ruleEvents, passReasons });
+  // The extension version is optional but must look like a version (FOC-05).
+  assert.equal(bridge.validReport({ ...baseReport, version: '0.5.0' }).version, '0.5.0');
+  assert.equal(bridge.validReport(baseReport).version, null);
+  for (const version of ['1.x', 42, '1'.repeat(30)]) {
+    assert.equal(bridge.validReport({ ...baseReport, version }), null);
+  }
   // An older extension that does not report block rule activity still passes.
   assert.deepEqual(bridge.validReport(baseReport).ruleEvents, {});
   assert.deepEqual(bridge.validReport(baseReport).passReasons, {});

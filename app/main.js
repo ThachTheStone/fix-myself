@@ -20,6 +20,7 @@ import {
   exactTiming, nativeReminders, openExactTimingSetting, permissionState, requestPermission,
   scheduleUpcoming, showNow
 } from './notify.js';
+import extensionManifest from '../extension/manifest.json';
 import { clearPhotos, deletePhoto, photoUrl, savePhoto } from './photos.js';
 import {
   detectLanguage, getLanguage, LANGUAGE_KEY, LANGUAGES, locale, setLanguage, t, translateDocument, translateError
@@ -307,8 +308,9 @@ function renderTimer(now = Date.now()) {
     if (current.textContent !== text) current.textContent = text;
   }
   element('focus-preset').hidden = !(presetsEnabled() && (state.appPresets ?? []).length > 0 && !running);
-  const covered = chromeCoverage(state, now).filter((profile) => profile.current).length;
+  const covered = chromeCoverage(state, now, extensionManifest.version).filter((profile) => profile.current).length;
   const coverage = covered === 0 ? t('focus.noCoverage') : t('focus.coverage', { n: covered });
+  const needsReload = running && chromeCoverage(state, now, extensionManifest.version).some((profile) => profile.current && profile.outdated);
   const apps = state.focus?.apps;
   const sessionStatus = running
     ? desktop ? t('focus.inProgress', { coverage }) : t('focus.localRunning')
@@ -318,7 +320,8 @@ function renderTimer(now = Date.now()) {
     sessionStatus,
     paused ? t('focusTask.paused') : '',
     running && sessionStatus && apps ? t('apps.inFocus', { apps: apps.apps.map((app) => app.name).join(', ') }) : '',
-    running ? appCoverageText() : ''
+    running ? appCoverageText() : '',
+    needsReload ? t('focus.extensionReload') : ''
   ].filter(Boolean).join(' ');
   if (element('focus-status').textContent !== status) element('focus-status').textContent = status;
   const mini = state.preferences.miniTimer ?? {};
@@ -772,13 +775,15 @@ async function pullChromeReports() {
 }
 
 function renderCoverage() {
-  const coverage = chromeCoverage(state);
+  const coverage = chromeCoverage(state, Date.now(), extensionManifest.version);
   element('coverage-empty').hidden = coverage.length > 0;
   element('coverage-list').replaceChildren(...coverage.map((profile) => h('li', {},
     h('p', { class: 'strong', text: profile.name }),
     h('p', { class: 'muted', text: profile.current
       ? t('settings.covered', { time: formatTime(profile.lastSeenAt) })
-      : t('settings.unavailableSince', { time: formatTime(profile.lastSeenAt) }) }))));
+      : t('settings.unavailableSince', { time: formatTime(profile.lastSeenAt) }) }),
+    profile.outdated ? h('p', { class: 'muted', text: t('settings.extensionOutdated', {
+      version: profile.version ?? t('settings.extensionOlder'), expected: extensionManifest.version }) }) : null)));
 }
 
 // ---------------------------------------------------------------------------
