@@ -94,6 +94,56 @@ children and their progress, and focus time rolled up over the subtree. Sync kee
   - When `deadlineAfterParent` is true, show "Due after its parent task."
 - New strings go under the `tree.` prefix in English and Vietnamese. New model errors go in `ERRORS_VI`.
 
+## Changes after critique (these replace the decisions above where they differ)
+- **C1, whole subtree.**
+  - Completing or canceling throws `'Complete or cancel its child tasks first.'` when any task in `subtreeIds(id)` is
+    active, not only a direct child.
+  - During a hold on `H`, moving a task out of `H`'s subtree throws when that task or anything in its subtree is
+    active. This also covers a closed child that has an open grandchild.
+- **C2, repair at read time, never written.** Replace the "Sync repair" section.
+  - Add `effectiveParents(state)`. It returns a `Map` from task id to effective parent id, computed once per state; it
+    may be memoised on the state object identity.
+  - A task whose stored parent is in `state.deleted`, or is not among the tasks, is top level.
+  - A cycle is broken at the task with the newest `stamps.parentId`, the lower id winning a tie. That task is top level.
+  - Every tree walk, view, rollup, move check and hold check uses this map, never `task.parentId` directly.
+  - `mergeSync` writes nothing for the tree and creates no conflict for it.
+  - `summary.repaired` is the number of tasks whose effective parent differs from the stored one.
+  - `resolveConflict` needs no special case: the map covers whatever it produces.
+- **C3, sync validation.** In `validatePayload`, a task's `parentId` must be `undefined`, `null`, or a string of 1 to 64
+  characters. Otherwise throw `'The sync file contains an invalid task.'`
+- **C4, when each check runs.**
+  - The "closed ancestor" check (`'Reopen the parent task first.'`) runs only when `parentId` changes or a task is
+    created.
+  - The active-descendants check runs only when status changes to completed or canceled. Editing other fields of a
+    closed parent that sync left with open children still works.
+  - Auto-reopen of ancestors runs after the main save, on the resulting state, from the top ancestor down. It is skipped
+    inside `applyPendingBlockChanges`.
+  - `mergeSync` never reopens ancestors.
+- **C5, next action descends.**
+  - When the automatic `nextTask` candidate has active descendants, use its first active leaf instead (depth first, in
+    `state.tasks` order).
+  - An explicit `nextActionId` that has active descendants is kept as the user chose it.
+- **C6, where children appear.**
+  - Children nest under their effective parent in whichever list the parent appears.
+  - When the effective parent is `null`, or is closed while the child is active, the child shows at the top level of
+    its own list.
+  - Children keep their order in `state.tasks`.
+- **C7, strict eligibility.** WB-01 now accepts active child tasks. A task may have an open strict block when it has
+  subtasks, criteria, or at least one active task in its subtree. Update the check in `saveTask` and its error stays
+  the same.
+- **C8, display.** The task detail focus line keeps the effort estimate (FOC-11). The format is "Focus time: {own} ·
+  estimate {effort} · with child tasks: {total}", and each part shows only when it applies.
+- **Extra tests**:
+  - a 3-node cycle;
+  - two devices merging the same cycle in opposite orders reach the same effective tree, with no `conflicts`;
+  - a tombstoned parent compared with a parent that is merely missing;
+  - `resolveConflict` choosing a value that makes a cycle;
+  - a payload with a number or object as `parentId`;
+  - editing the title of a closed parent that has an open child after sync;
+  - completing `H` during a hold while a grandchild is open under a closed child, which throws;
+  - next action descending to a leaf of a pinned parent;
+  - strict eligibility through an active child.
+
 ## Steps
 1. Model: field, selectors, move checks, status rules, delete rule, strict hold rule. Tests.
 2. Sync repair. Tests.
