@@ -1,14 +1,16 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, Menu, nativeImage, screen, shell, Tray } = require('electron');
 const { spawn } = require('node:child_process');
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
 const { randomBytes } = require('node:crypto');
-const { mkdir, readFile, writeFile } = require('node:fs/promises');
+const fsp = require('node:fs/promises');
+const { mkdir, readFile, writeFile } = fsp;
 const { join, resolve } = require('node:path');
 const { createFocusBridge, validSnapshot, MAX_PLAN_BYTES, PORT } = require('./focus-bridge.cjs');
 const { listOpenApps } = require('./apps.cjs');
 const { createAppGuard } = require('./app-guard.cjs');
 const { startWatcher } = require('./app-watcher.cjs');
 const { createWorkspaces } = require('./workspaces.cjs');
+const { createSecrets } = require('./secrets.cjs');
 const { createMiniTimer, validMiniView } = require('./mini-timer.cjs');
 
 const loginFlag = '--login-launch';
@@ -206,6 +208,10 @@ function registerHandlers() {
     guarded('desktop:workspace-prune', (taskIds) => workspaces.prune(taskIds));
     guarded('desktop:workspace-open', (request) => workspaces.open(request));
     guarded('desktop:workspace-apps', (taskId) => workspaces.apps(taskId));
+    const secrets = createSecrets({ safeStorage, fs: fsp, filePath: join(app.getPath('userData'), 'secrets.json') });
+    guarded('desktop:secret-get', (key) => secrets.get(key));
+    guarded('desktop:secret-set', (key, value) => secrets.set(key, value));
+    guarded('desktop:secret-remove', (key) => secrets.remove(key));
     ipcMain.handle('desktop:mini-timer', (event, view) => {
       fromApp(event);
       const clean = validMiniView(view);
