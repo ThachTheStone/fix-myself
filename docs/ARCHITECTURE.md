@@ -35,6 +35,7 @@ Mã ghép nối và thông tin nhạy cảm ở trong môi trường chạy cụ
 |---|---|
 | DAY-01, FOC-01 đến FOC-05 | Có trong bản nền. Chờ nghiệm thu A-01, A-02 trên Windows 11 thật. |
 | DAY-02, TASK-01, TASK-02 | Đã làm: mission, tối đa ba ưu tiên, chọn việc tiếp theo, carryover giữ hạn, quick capture vào inbox, bốn trạng thái, cam kết, subtask, ước lượng, tiêu chí hoàn thành, work block và timeline. |
+| TASK-03 đến TASK-06 | Đã làm: `parentId` tạo cây task tối đa 5 cấp, 50 con mỗi task; cha chỉ đóng khi cả cây con đã xong, mở lại con thì mở lại các cha đã đóng; không xóa task còn con; giữ phiên strict thì không gỡ việc con chưa xong. Trang Tasks hiện cây, trang task hiện đường dẫn cha, danh sách con, tiến độ và thời gian tập trung gộp. Kiểm tra bằng `tests/model.test.js` và `tests/browser.e2e.js`; chưa thử trên thiết bị thật. |
 | REM-01, REM-02 | Đã làm: lead time, snooze, thiết bị nhận mặc định, thay khi mốc đổi, hủy khi hoàn thành, gom nhắc nhở quá hạn và hiển thị trạng thái quyền. Trên Android cần kiểm tra trên máy POCO. |
 | SYS-01, SYS-02 | ID ổn định, múi giờ kế hoạch, gộp theo trường, xung đột và tombstone đã có. Chưa có dịch vụ đồng bộ qua mạng, nên chưa đạt mục tiêu 30 giây của SYS-06. |
 | SYS-05 | Xuất và xóa dữ liệu người dùng tạo đã có. |
@@ -119,6 +120,7 @@ State cục bộ chuyển từ `version: 2` sang `version: 3`, kèm hàm chuyể
 
 | Dữ liệu | Đồng bộ | Yêu cầu | Ghi chú |
 |---|---|---|---|
+| `task.parentId`: id của task cha hoặc `null` | Có, là trường của task | TASK-03, TASK-06 | Task cũ không có trường này, đọc như `null`. Cha thiếu hoặc đã xóa, và vòng lặp do hai thiết bị cùng dời, được sửa khi đọc bằng `effectiveParents` (vòng lặp cắt ở task có `stamps.parentId` mới nhất, bằng nhau thì id nhỏ hơn); không ghi lại vào dữ liệu và không tạo xung đột. |
 | `task.links`: `[{ id, url, label }]` | Có, là trường của task | WS-01 | Chỉ http và https, tối đa 20 mục chung với dữ liệu cục bộ. |
 | `workspace-items.json` trong thư mục dữ liệu của app: `{ [itemId]: { taskId, kind: 'file' \| 'folder' \| 'app', path, label } }` | Không | WS-01, WS-04 | Chỉ tiến trình chính đọc và ghi ([desktop/workspaces.cjs](../desktop/workspaces.cjs)); renderer chỉ gọi theo `itemId` nên không thể bắt tiến trình chính mở một đường dẫn tự chọn. Mục chỉ được tạo bằng hộp thoại hệ thống hoặc danh sách app đang mở. Đường dẫn chỉ đúng trên máy đã thêm. Mục của task đã xóa bị dọn khi mở app và sau khi gộp đồng bộ. |
 | `focus.sessionId`, `focus.taskId` (hoặc `null` là wandering), `focus.workspaceApps`, `focus.paused`, `focus.endedAt`, `focus.strict` | Không | FOC-09, FOC-10, WS-04, WB-02 | `focus.strict` là `{ blockId, taskId, blockStart, blockEnd, holdUntil, limit, exitRequestedAt }` (Unix ms) khi một block nghiêm ngặt đang giữ phiên, ngược lại `null`. `workspaceApps` được sao chép lúc bắt đầu phiên, giống preset. Sau **End session**, phiên vẫn được giữ đến `endAt` để Chrome tiếp tục chặn trang, nhưng không còn ghi thời gian và không còn giới hạn app. Phiên mới bắt đầu trong khoảng đó chặn hợp hai danh sách trang. |

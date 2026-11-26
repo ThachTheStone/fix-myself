@@ -38,8 +38,10 @@ export const ALWAYS_ALLOWED_APPS = [
 // Fields that sync between devices. Each carries its own edit stamp.
 export const TASK_FIELDS = [
   'title', 'status', 'pinned', 'supportsMission', 'nextStep', 'effortMinutes', 'criteria',
-  'subtasks', 'workBlocks', 'plannedDate', 'deadline', 'commitment', 'remind', 'source', 'review', 'links'
+  'subtasks', 'workBlocks', 'plannedDate', 'deadline', 'commitment', 'remind', 'source', 'review', 'links', 'parentId'
 ];
+export const MAX_TREE_DEPTH = 5;
+export const MAX_CHILDREN = 50;
 export const REVIEW_RESULTS = ['unreviewed', 'met', 'partly_met', 'needs_review'];
 export const REVIEW_LABELS = { unreviewed: 'Unreviewed', met: 'Met', partly_met: 'Partly met', needs_review: 'Needs review' };
 const ROOT_FIELDS = ['mission', 'nextActionId', 'settings', 'blockRules', 'pendingRuleChanges', 'appPresets', 'pendingBlockChanges'];
@@ -130,6 +132,7 @@ function blankTask(c) {
     source: null,
     review: null,
     links: [],
+    parentId: null,
     createdAt: c.at,
     completedAt: null,
     events: [],
@@ -398,6 +401,12 @@ function validateChanges(task, changes) {
       case 'source':
         next.source = value ?? null;
         break;
+      case 'parentId':
+        if (value !== null && value !== undefined && (typeof value !== 'string' || !value)) {
+          throw new Error('This parent task no longer exists.');
+        }
+        next.parentId = value ?? null;
+        break;
       default:
         throw new Error(`Unknown task field: ${field}`);
     }
@@ -465,6 +474,205 @@ function weakensBlock(old, replacement) {
   return Date.parse(replacement.start) > Date.parse(old.start) || Date.parse(replacement.end) < Date.parse(old.end);
 }
 
+// ---------------------------------------------------------------------------
+// Task tree (TASK-03 to TASK-06). Children are found by scanning the tasks.
+
+const storedParent = (task) => task.parentId ?? null;
+const isClosed = (task) => !isActive(task);
+const effectiveCache = new WeakMap();
+
+// The parent each task is read with. Sync can leave a missing or deleted parent or a cycle, so
+// those are repaired here, when reading, and never written back. A cycle breaks at the task
+// whose parentId was set last (the lower id wins a tie), which becomes top level.
+export function effectiveParents(state) {
+  const cached = effectiveCache.get(state);
+  if (cached) return cached;
+  const ids = new Set(state.tasks.map((task) => task.id));
+  const byId = new Map(state.tasks.map((task) => [task.id, task]));
+  const map = new Map();
+  for (const task of state.tasks) {
+    const parent = storedParent(task);
+    map.set(task.id, parent && ids.has(parent) && !state.deleted?.[parent] ? parent : null);
+  }
+  for (;;) {
+    let cycle = null;
+    const finished = new Set();
+    for (const task of state.tasks) {
+      const path = [];
+      let current = task.id;
+      while (current && !finished.has(current)) {
+        const at = path.indexOf(current);
+        if (at >= 0) {
+          cycle = path.slice(at);
+          break;
+        }
+        path.push(current);
+        current = map.get(current);
+      }
+      if (cycle) break;
+      path.forEach((id) => finished.add(id));
+    }
+    if (!cycle) break;
+    const stampOfParent = (id) => byId.get(id).stamps?.parentId ?? '';
+    const newest = cycle.sort((a, b) => {
+      if (stampOfParent(a) !== stampOfParent(b)) return stampOfParent(a) > stampOfParent(b) ? -1 : 1;
+      return a < b ? -1 : 1;
+    })[0];
+    map.set(newest, null);
+  }
+  effectiveCache.set(state, map);
+  return map;
+}
+
+export function childrenOf(state, id) {
+  const parents = effectiveParents(state);
+  return state.tasks.filter((task) => parents.get(task.id) === id);
+}
+
+// Nearest ancestor first. A visited set stops damaged data from looping.
+export function ancestorsOf(state, id) {
+  const byId = new Map(state.tasks.map((task) => [task.id, task]));
+  const parents = effectiveParents(state);
+  const seen = new Set([id]);
+  const out = [];
+  let parent = parents.get(id) ?? null;
+  while (parent && byId.has(parent) && !seen.has(parent)) {
+    seen.add(parent);
+    out.push(byId.get(parent));
+    parent = parents.get(parent) ?? null;
+  }
+  return out;
+}
+
+// Children shown nested under a task. A closed task shows none: an active child of a closed
+// parent is listed at the top level of its own list instead.
+export function nestedChildren(state, task) {
+  return isActive(task) ? childrenOf(state, task.id) : [];
+}
+
+// A strict block needs subtasks, completion criteria or an active task in the subtree (WB-01).
+export function strictEligible(state, task) {
+  return task.subtasks.length > 0 || Boolean(task.criteria) || hasActiveDescendant(state, task.id);
+}
+
+// Taking task `id` out of its parent (move, cancel or delete) must not strip a strict block
+// above it of the child that made it eligible. `newParent` is where it goes, or null.
+function checkAncestorsNeedIt(state, id, newParent, nowMs) {
+  const inside = new Set(subtreeIds(state, id));
+  inside.add(id);
+  for (const ancestor of ancestorsOf(state, id)) {
+    if (!ancestor.workBlocks.some((block) => isOpenStrict(block, nowMs))) continue;
+    const kept = new Set([ancestor.id, ...subtreeIds(state, ancestor.id)]);
+    if (newParent && kept.has(newParent)) continue;
+    const stays = subtreeIds(state, ancestor.id).some((other) => {
+      if (inside.has(other)) return false;
+      const task = state.tasks.find((item) => item.id === other);
+      return task && isActive(task);
+    });
+    if (strictEligible(state, ancestor) && ancestor.subtasks.length === 0 && !ancestor.criteria && !stays) {
+      throw new Error('A strict block on its parent task needs it. Add subtasks or criteria to the parent first.');
+    }
+  }
+}
+
+const hasActiveDescendant = (state, id) => subtreeIds(state, id).some((item) => {
+  const task = state.tasks.find((other) => other.id === item);
+  return task && isActive(task);
+});
+
+// The first active task, depth first, that has no active task beneath it.
+function firstActiveLeaf(state, id, seen = new Set()) {
+  if (seen.has(id)) return null;
+  seen.add(id);
+  for (const child of childrenOf(state, id)) {
+    const leaf = firstActiveLeaf(state, child.id, seen);
+    if (leaf) return leaf;
+  }
+  const task = state.tasks.find((item) => item.id === id);
+  return task && isActive(task) ? task : null;
+}
+
+export function subtreeIds(state, id) {
+  const seen = new Set([id]);
+  const out = [];
+  const queue = [id];
+  while (queue.length) {
+    const current = queue.shift();
+    for (const child of childrenOf(state, current)) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      out.push(child.id);
+      queue.push(child.id);
+    }
+  }
+  return out;
+}
+
+// Levels in the subtree, counting the task itself: a leaf is 1.
+function treeHeight(state, id) {
+  const seen = new Set([id]);
+  let level = [id];
+  let height = 0;
+  while (level.length) {
+    height += 1;
+    const nextLevel = [];
+    for (const current of level) {
+      for (const child of childrenOf(state, current)) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        nextLevel.push(child.id);
+      }
+    }
+    level = nextLevel;
+  }
+  return height;
+}
+
+// Checks a move or a new child. `task` is the record after the change.
+function checkParent(state, task, existing) {
+  const parentId = storedParent(task);
+  if (!parentId) return;
+  const parent = state.tasks.find((item) => item.id === parentId);
+  if (!parent) throw new Error('This parent task no longer exists.');
+  if (parentId === task.id || (existing && subtreeIds(state, task.id).includes(parentId))) {
+    throw new Error('A task cannot move under itself or its own child tasks.');
+  }
+  const ancestors = ancestorsOf(state, parentId);
+  const height = existing ? treeHeight(state, task.id) : 1;
+  if (ancestors.length + 1 + height > MAX_TREE_DEPTH) throw new Error('Task trees can be at most 5 levels deep.');
+  if (childrenOf(state, parentId).filter((child) => child.id !== task.id).length >= MAX_CHILDREN) {
+    throw new Error('A task can have at most 50 child tasks.');
+  }
+  if (isActive(task) && [parent, ...ancestors].some(isClosed)) throw new Error('Reopen the parent task first.');
+}
+
+// The tasks this task may move under: the same checks as a real move.
+export function parentChoices(state, id) {
+  const task = state.tasks.find((item) => item.id === id);
+  if (!task) return [];
+  return state.tasks.filter((other) => {
+    if (other.id === id) return false;
+    if (other.id === effectiveParents(state).get(id)) return true;
+    try {
+      checkParent(state, { ...task, parentId: other.id }, true);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+export function childProgress(state, id) {
+  const children = childrenOf(state, id);
+  return { done: children.filter(isClosed).length, total: children.length };
+}
+
+export function deadlineAfterParent(state, task) {
+  const parentId = effectiveParents(state).get(task.id) ?? null;
+  const parent = parentId ? state.tasks.find((item) => item.id === parentId) : null;
+  return Boolean(parent && parent.deadline && task.deadline && Date.parse(task.deadline) > Date.parse(parent.deadline));
+}
+
 export function saveTask(state, id, changes, ctx) {
   const c = context(ctx);
   const existing = id ? state.tasks.find((task) => task.id === id) : null;
@@ -483,6 +691,25 @@ export function saveTask(state, id, changes, ctx) {
   if (existing && after.status === 'completed' && before.status !== 'completed' && holdsTask
       && after.subtasks.some((subtask) => !subtask.done)) {
     throw new Error('Tick every subtask before completing this task.');
+  }
+  const parentChanged = existing ? storedParent(before) !== storedParent(after) : storedParent(after) !== null;
+  if (parentChanged) checkParent(state, after, Boolean(existing));
+  if (existing && before.status !== after.status && !isActive(after) && hasActiveDescendant(state, before.id)) {
+    throw new Error('Complete or cancel its child tasks first.');
+  }
+  const hold = state.focus?.strict;
+  if (existing && hold && hold.taskId !== before.id) {
+    const held = new Set(subtreeIds(state, hold.taskId));
+    const parent = storedParent(after);
+    const leaves = parentChanged && parent !== hold.taskId && !held.has(parent);
+    if (held.has(before.id) && ((isActive(before) && after.status === 'canceled' && before.status !== 'canceled')
+        || (leaves && (isActive(before) || hasActiveDescendant(state, before.id))))) {
+      throw new Error('Open child tasks cannot be removed during a strict block.');
+    }
+  }
+  if (existing && ((parentChanged && storedParent(before) !== null)
+      || (after.status === 'canceled' && before.status !== 'canceled'))) {
+    checkAncestorsNeedIt(state, before.id, parentChanged ? storedParent(after) : null, nowMs);
   }
   let queued = null;
   if (ctx?.applyingPending !== true) {
@@ -534,9 +761,14 @@ export function saveTask(state, id, changes, ctx) {
       if (weakened) after.workBlocks = blocks.sort((a, b) => a.start.localeCompare(b.start));
       if (weakened || pending.length !== current.length) queued = pending;
     }
-    if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))
-        && after.subtasks.length === 0 && !after.criteria) {
-      throw new Error('Add subtasks or completion criteria before making a block strict.');
+    // A save may not make a block strict on an ineligible task, nor take a task with an open
+    // strict block from eligible to ineligible. A task that already lost its last child may be edited.
+    if (after.workBlocks.some((block) => isOpenStrict(block, nowMs))) {
+      const eligible = (task) => (existing ? strictEligible(state, task) : strictEligible({ ...state, tasks: [...state.tasks, task] }, task));
+      const becameStrict = after.workBlocks.some((block) => isOpenStrict(block, nowMs) && !earlier.get(block.id)?.strict);
+      if (!eligible(after) && (becameStrict || (existing && eligible(before)))) {
+        throw new Error('Add subtasks or completion criteria before making a block strict.');
+      }
     }
   }
 
@@ -570,7 +802,18 @@ export function saveTask(state, id, changes, ctx) {
   let next = { ...state, tasks };
   if (queued) next = setRoot(next, 'pendingBlockChanges', queued, c);
   if (state.nextActionId === after.id && !isActive(after)) next = setRoot(next, 'nextActionId', null, c);
+  if (existing && isActive(after) && !isActive(before) && ctx?.applyingPending !== true) {
+    // An active child needs an open parent, so reopen closed ancestors, from the top down.
+    for (const ancestor of ancestorsOf(next, after.id).reverse()) {
+      const current = next.tasks.find((task) => task.id === ancestor.id);
+      if (current && isClosed(current)) next = saveTask(next, ancestor.id, { status: 'open' }, c);
+    }
+  }
   return reconcileReminders(next, c.now);
+}
+
+export function addChildTask(state, parentId, fields, ctx) {
+  return captureTask(state, { ...fields, parentId }, ctx);
 }
 
 export function captureTask(state, fields, ctx) {
@@ -599,6 +842,12 @@ export function deleteTask(state, id, ctx) {
   if (doomed.workBlocks.some((block) => isOpenStrict(block, c.now.getTime())) || state.focus?.strict?.taskId === id) {
     throw new Error('Remove strict from this task’s work blocks first.');
   }
+  const hold = state.focus?.strict;
+  if (hold && isActive(doomed) && subtreeIds(state, hold.taskId).includes(id)) {
+    throw new Error('Open child tasks cannot be removed during a strict block.');
+  }
+  if (childrenOf(state, id).length > 0) throw new Error('Delete or move its child tasks first.');
+  checkAncestorsNeedIt(state, id, null, c.now.getTime());
   let next = {
     ...state,
     tasks: state.tasks.filter((task) => task.id !== id),
@@ -710,7 +959,8 @@ export function nextTask(state, day = planningDay(state)) {
   const chosen = state.tasks.find((task) => task.id === state.nextActionId && isActive(task));
   if (chosen) return chosen;
   const plan = todayTasks(state, day).filter(isActive);
-  return plan.find((task) => task.pinned) ?? plan[0] ?? null;
+  const candidate = plan.find((task) => task.pinned) ?? plan[0] ?? null;
+  return candidate ? firstActiveLeaf(state, candidate.id) ?? candidate : null;
 }
 
 export function carryovers(state, day = planningDay(state)) {
@@ -730,7 +980,9 @@ export function approachingDeadlines(state, now = new Date(), days = 7) {
 }
 
 export function inboxTasks(state) {
-  return state.tasks.filter((task) => isActive(task) && !task.pinned && !task.plannedDate
+  const parents = effectiveParents(state);
+  const activeIds = new Set(state.tasks.filter(isActive).map((task) => task.id));
+  return state.tasks.filter((task) => isActive(task) && !activeIds.has(parents.get(task.id)) && !task.pinned && !task.plannedDate
     && !task.commitment && task.workBlocks.length === 0);
 }
 
@@ -1263,6 +1515,10 @@ function validatePayload(payload) {
     if (task.links !== undefined && !validSyncedLinks(task.links)) {
       throw new Error('The sync file contains an invalid task.');
     }
+    if (task.parentId !== undefined && task.parentId !== null
+        && (typeof task.parentId !== 'string' || task.parentId.length < 1 || task.parentId.length > 64)) {
+      throw new Error('The sync file contains an invalid task.');
+    }
   }
   for (const rule of payload.data.blockRules ?? []) {
     if (typeof rule?.id !== 'string' || typeof rule.name !== 'string' || !Array.isArray(rule.domains)) {
@@ -1342,7 +1598,7 @@ export function mergeSync(state, payload, ctx) {
   const base = state.peers[payload.deviceId]?.seenUntil ?? null;
   const deleted = { ...state.deleted, ...remote.deleted };
   const conflicts = [];
-  const summary = { added: 0, updated: 0, removed: 0, conflicts: 0 };
+  const summary = { added: 0, updated: 0, removed: 0, conflicts: 0, repaired: 0 };
 
   const remoteTasks = new Map(remote.tasks.map((task) => [task.id, task]));
   const tasks = [];
@@ -1426,6 +1682,8 @@ export function mergeSync(state, payload, ctx) {
     conflicts: [...keptConflicts, ...conflicts],
     peers: { ...state.peers, [payload.deviceId]: { name: payload.deviceName ?? null, seenUntil: payload.exportedAt, mergedAt: c.at } }
   };
+  const effective = effectiveParents(next);
+  summary.repaired = next.tasks.filter((task) => storedParent(task) !== (effective.get(task.id) ?? null)).length;
   if (next.nextActionId && !next.tasks.some((task) => task.id === next.nextActionId && isActive(task))) {
     next.nextActionId = null;
   }
@@ -1757,6 +2015,12 @@ function focusMs(state, now, include) {
 
 export function taskFocusMinutes(state, taskId, now = new Date()) {
   const ms = focusMs(state, now, (segment) => segment.taskId === taskId).reduce((sum, item) => sum + item.ms, 0);
+  return Math.round(ms / 60_000);
+}
+
+export function subtreeFocusMinutes(state, id, now = new Date()) {
+  const ids = new Set([id, ...subtreeIds(state, id)]);
+  const ms = focusMs(state, now, (segment) => ids.has(segment.taskId)).reduce((sum, item) => sum + item.ms, 0);
   return Math.round(ms / 60_000);
 }
 

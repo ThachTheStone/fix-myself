@@ -5,7 +5,8 @@ import {
   recordChromeReports, ruleReview,
   DEFAULT_DOMAINS, deleteTask, deleteWorkout, deliveryReview, dismissReminder,
   dueReminders, eraseUserData, exportSync, focusSnapshot, inboxTasks, isActive, isAlwaysAllowed, isFocused, isSessionRunning, endFocus, pauseFocus, resumeFocus, settleFocus,
-  taskFocusMinutes, focusTimeReview,
+  taskFocusMinutes, focusTimeReview, addChildTask, ancestorsOf, childProgress, childrenOf, deadlineAfterParent,
+  parentChoices, subtreeFocusMinutes, effectiveParents, nestedChildren,
   appLimitSnapshot, appReview, recordAppEvent,
   markDelivered,
   mergeSync, normalizeDomains, onLogin, parseLeadTimes, PASS_MINUTES, pendingDelivery, planningDay, planSnapshot,
@@ -53,6 +54,7 @@ let missedCount = 0;
 let focusNextStep = false;
 let tick = 0;
 const sectionCache = new Map();
+const collapsedTasks = new Set();
 const photoUrls = new Map();
 
 // ---------------------------------------------------------------------------
@@ -553,6 +555,7 @@ function taskMeta(task, isNext) {
   const now = new Date().toISOString();
   const upcomingBlock = task.workBlocks.find((block) => block.end > now);
   const doneSubtasks = task.subtasks.filter((item) => item.done).length;
+  const progress = childProgress(state, task.id);
   return [
     isNext ? t('meta.next') : '',
     task.pinned ? t('meta.priority') : '',
@@ -562,6 +565,7 @@ function taskMeta(task, isNext) {
     upcomingBlock ? t('meta.block', { range: formatRange(upcomingBlock.start, upcomingBlock.end) }) : '',
     task.deadline ? t(isActive(task) && task.deadline < now ? 'meta.overdue' : 'meta.due', { time: formatTime(task.deadline) }) : '',
     task.subtasks.length ? t('meta.subtasks', { done: doneSubtasks, total: task.subtasks.length }) : '',
+    progress.total ? t('tree.meta', progress) : '',
     task.effortMinutes ? t('common.minutesShort', { n: task.effortMinutes }) : ''
   ].filter(Boolean).join(' · ');
 }
@@ -589,21 +593,48 @@ function taskRow(task, list, options = {}) {
     href: '#task/' + encodeURIComponent(task.id), class: 'text-link', text: t('common.open'),
     'aria-label': t('task.openLabel', { title: task.title }), dataset: { focusKey: `open:${list}:${task.id}` }
   }));
-  return h('li', { class: 'task' + (task.status === 'canceled' ? ' canceled' : '') },
+  return h('li', { class: 'task' + (task.status === 'canceled' ? ' canceled' : '') + (options.children ? ' has-children' : '') },
+    options.toggle,
     done,
     h('div', { class: 'task-detail' },
       h('p', { class: 'task-title' }, h('a', { href: '#task/' + encodeURIComponent(task.id), text: task.title })),
       h('p', { class: 'task-meta', text: options.meta ?? taskMeta(task, options.isNext) })),
-    h('div', { class: 'task-actions' }, ...actions));
+    h('div', { class: 'task-actions' }, ...actions),
+    options.children);
+}
+
+// A task with its child tasks nested beneath it. `seen` stops damaged data from looping.
+function taskTree(task, list, options, seen = new Set()) {
+  seen.add(task.id);
+  const children = nestedChildren(state, task).filter((child) => !seen.has(child.id));
+  const rowOptions = { ...options };
+  if (children.length) {
+    const collapsed = collapsedTasks.has(task.id);
+    rowOptions.toggle = h('button', {
+      type: 'button', class: 'tree-toggle', text: collapsed ? '\u25B8' : '\u25BE',
+      'aria-expanded': String(!collapsed),
+      'aria-label': t(collapsed ? 'tree.expand' : 'tree.collapse', { title: task.title }),
+      dataset: { focusKey: `toggle:${list}:${task.id}` },
+      onclick: () => {
+        if (collapsed) collapsedTasks.delete(task.id);
+        else collapsedTasks.add(task.id);
+        render();
+      }
+    });
+    if (!collapsed) {
+      rowOptions.children = h('ul', { class: 'task-tree' },
+        ...children.map((child) => taskTree(child, list, {}, seen)));
+    }
+  }
+  return taskRow(task, list, rowOptions);
 }
 
 function renderTasks(id, tasks, options = {}) {
   const list = element(id);
-  list.replaceChildren(...tasks.map((task) => taskRow(task, id, {
-    ...options,
-    isNext: task.id === options.nextId,
-    meta: options.metaFor?.(task)
-  })));
+  list.replaceChildren(...tasks.map((task) => {
+    const rowOptions = { ...options, isNext: task.id === options.nextId, meta: options.metaFor?.(task) };
+    return options.tree ? taskTree(task, id, rowOptions) : taskRow(task, id, rowOptions);
+  }));
   const empty = element(id.replace('-list', '-empty'));
   if (empty) empty.hidden = tasks.length > 0;
 }
@@ -667,8 +698,12 @@ function renderToday(now) {
 function renderTaskLists() {
   const inbox = inboxTasks(state);
   const inboxIds = new Set(inbox.map((task) => task.id));
-  renderTasks('inbox-list', inbox);
-  renderTasks('planned-list', state.tasks.filter((task) => isActive(task) && !inboxIds.has(task.id)));
+  const byId = new Map(state.tasks.map((task) => [task.id, task]));
+  // A child sits under its parent. It is a root here only when its parent is closed or gone.
+  const parents = effectiveParents(state);
+  const isRoot = (task) => !parents.get(task.id) || !isActive(byId.get(parents.get(task.id)));
+  renderTasks('inbox-list', inbox, { tree: true });
+  renderTasks('planned-list', state.tasks.filter((task) => isActive(task) && !inboxIds.has(task.id) && isRoot(task)), { tree: true });
   const closed = state.tasks.filter((task) => !isActive(task))
     .sort((a, b) => (b.completedAt ?? b.createdAt).localeCompare(a.completedAt ?? a.createdAt));
   renderTasks('closed-list', closed);
@@ -723,13 +758,42 @@ function editTask(changes, feedback, success) {
   return attempt(() => saveTask(state, currentTaskId, changes, ctx()), feedback, success);
 }
 
+function renderTree(task, kids, fresh) {
+  const ancestors = ancestorsOf(state, task.id).reverse();
+  if (!cached('detail:crumbs', ancestors.map((item) => [item.id, item.title]))) {
+    const crumbs = element('detail-breadcrumb');
+    crumbs.hidden = ancestors.length === 0;
+    crumbs.replaceChildren(...ancestors.flatMap((item, index) => [
+      index ? ' \u203A ' : null,
+      h('a', { href: '#task/' + encodeURIComponent(item.id), text: item.title })
+    ]).filter(Boolean));
+  }
+  const progress = childProgress(state, task.id);
+  element('child-progress').textContent = progress.total ? t('tree.progress', progress) : t('tree.none');
+  if (!cached('detail:children', kids.map((child) => [child.id, child.title, child.status]))) {
+    element('child-list').replaceChildren(...kids.map((child) => h('li', {},
+      h('a', { href: '#task/' + encodeURIComponent(child.id), text: child.title }),
+      ' ', h('span', { class: 'muted', text: '\u00B7 ' + statusLabel(child.status) }))));
+  }
+  const options = state.tasks.map((item) => [item.id, item.title, item.status, item.parentId ?? null, item.stamps?.parentId ?? null]);
+  if (!cached('detail:parents', [task.id, options])) {
+    const select = element('detail-input-parent');
+    select.replaceChildren(
+      h('option', { value: '', text: t('tree.top') }),
+      ...parentChoices(state, task.id).map((item) => h('option', { value: item.id, text: item.title })));
+    select.value = effectiveParents(state).get(task.id) ?? '';
+  } else if (fresh) {
+    element('detail-input-parent').value = effectiveParents(state).get(task.id) ?? '';
+  }
+}
+
 function renderDetail(fresh) {
   const task = state.tasks.find((item) => item.id === currentTaskId);
   element('detail-missing').hidden = Boolean(task);
   element('detail-body').hidden = !task;
   if (fresh) {
     for (const key of [...sectionCache.keys()]) if (key.startsWith('detail:')) sectionCache.delete(key);
-    for (const id of ['detail-feedback', 'commitment-feedback', 'subtask-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback']) {
+    for (const id of ['detail-feedback', 'commitment-feedback', 'subtask-feedback', 'block-feedback', 'review-feedback', 'workspace-feedback', 'child-feedback']) {
       element(id).textContent = '';
     }
   }
@@ -747,7 +811,11 @@ function renderDetail(fresh) {
   original.textContent = task.originalDeadline ? t('detail.originalDeadline', { time: formatTime(task.originalDeadline) }) : '';
   const spent = t('focusTask.time', { duration: focusDuration(taskFocusMinutes(state, task.id)) })
     + (task.effortMinutes ? t('focusTask.estimate', { duration: focusDuration(task.effortMinutes) }) : '');
-  if (element('detail-focus-time').textContent !== spent) element('detail-focus-time').textContent = spent;
+  const kids = childrenOf(state, task.id);
+  const rolled = spent + (kids.length ? t('tree.withChildren', { duration: focusDuration(subtreeFocusMinutes(state, task.id)) }) : '');
+  if (element('detail-focus-time').textContent !== rolled) element('detail-focus-time').textContent = rolled;
+  element('detail-after-parent').hidden = !deadlineAfterParent(state, task);
+  renderTree(task, kids, fresh);
 
   if (!cached('detail:commitment', task.commitment)) {
     element('commitment-view').hidden = !task.commitment;
@@ -2130,6 +2198,18 @@ function wireDetail() {
     const input = event.target.elements.title;
     const task = state.tasks.find((item) => item.id === currentTaskId);
     if (editTask({ subtasks: [...task.subtasks, { title: input.value }] }, element('subtask-feedback'))) {
+      input.value = '';
+      input.focus();
+    }
+  });
+  element('detail-input-parent').addEventListener('change', (event) => {
+    const saved = editTask({ parentId: event.target.value || null }, element('detail-feedback'), t('detail.saved'));
+    if (!saved) event.target.value = effectiveParents(state).get(currentTaskId) ?? '';
+  });
+  element('child-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = event.target.elements.title;
+    if (attempt(() => addChildTask(state, currentTaskId, { title: input.value }, ctx()), element('child-feedback'))) {
       input.value = '';
       input.focus();
     }

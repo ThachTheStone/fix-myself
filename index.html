@@ -129,6 +129,7 @@
 
     <section id="task" class="view" aria-labelledby="detail-title" hidden>
       <a href="#tasks" class="text-link back-link" data-i18n="detail.back">← All tasks</a>
+      <nav id="detail-breadcrumb" class="breadcrumb" hidden aria-label="Parent tasks" data-i18n-aria-label="tree.breadcrumb"></nav>
       <div class="page-title"><p class="eyebrow" id="detail-status"></p><h1 id="detail-title" class="detail-heading"></h1></div>
       <p id="detail-missing" class="empty panel" hidden data-i18n="detail.missing">This task is no longer available.</p>
       <div id="detail-body" class="detail-grid">
@@ -150,7 +151,10 @@
             <div><label for="detail-input-deadline" data-i18n="detail.deadline">Deadline</label><input id="detail-input-deadline" name="deadline" type="datetime-local"></div>
           </div>
           <p id="detail-original-deadline" class="muted" hidden></p>
+          <p id="detail-after-parent" class="muted" hidden data-i18n="tree.dueAfterParent">Due after its parent task.</p>
           <p id="detail-focus-time" class="muted"></p>
+          <label for="detail-input-parent" data-i18n="tree.parent">Parent task</label>
+          <select id="detail-input-parent"><option value="" data-i18n="tree.top">Top level</option></select>
           <label for="detail-input-next" data-i18n="detail.nextStep">Next step</label>
           <input id="detail-input-next" name="nextStep" maxlength="200" placeholder="The very next physical action" data-i18n-placeholder="detail.nextStepPlaceholder">
           <label for="detail-input-criteria" data-i18n="detail.criteria">Completion criteria</label>
@@ -185,6 +189,18 @@
               <button class="button primary" type="submit" data-i18n="detail.commit">Commit</button>
             </form>
             <p id="commitment-feedback" class="feedback" role="status"></p>
+          </section>
+
+          <section class="panel settings-panel" aria-labelledby="children-label">
+            <h2 id="children-label" data-i18n="tree.heading">Child tasks</h2>
+            <p id="child-progress" class="muted"></p>
+            <ul id="child-list" class="compact-list"></ul>
+            <form id="child-form" class="inline-fields">
+              <label for="child-title" class="visually-hidden" data-i18n="tree.newChild">New child task</label>
+              <input id="child-title" name="title" maxlength="160" placeholder="Add a child task" data-i18n-placeholder="tree.childPlaceholder" required>
+              <button class="button secondary" type="submit" data-i18n="tree.add">Add child task</button>
+            </form>
+            <p id="child-feedback" class="feedback" role="status"></p>
           </section>
 
           <section class="panel settings-panel" aria-labelledby="subtasks-label">

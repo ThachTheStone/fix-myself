@@ -930,3 +930,372 @@ test('WS-04: workspace apps with a path over 260 characters are dropped', () => 
   const started = startFocus(state, now, { workspaceApps: [{ path: long, name: 'Long' }, { path: 'C:\\Apps\\Ok.exe', name: 'Ok' }] });
   assert.deepEqual(started.focus.workspaceApps, [{ path: 'C:\\Apps\\Ok.exe', name: 'Ok' }]);
 });
+
+// ---------------------------------------------------------------------------
+// Task tree (TASK-03 to TASK-06)
+import {
+  addChildTask, ancestorsOf, childProgress, effectiveParents, nestedChildren, parentChoices, childrenOf, deadlineAfterParent, subtreeFocusMinutes, subtreeIds,
+  MAX_CHILDREN
+} from '../app/model.js';
+
+const TT = '2026-11-19T09:00:00Z';
+const byTitle = (state, title) => state.tasks.find((task) => task.title === title);
+
+function chain(depth, state = fresh()) {
+  let parent = null;
+  for (let level = 1; level <= depth; level += 1) {
+    state = parent
+      ? addChildTask(state, parent, { title: `L${level}` }, ctx(TT))
+      : captureTask(state, { title: `L${level}` }, ctx(TT));
+    parent = byTitle(state, `L${level}`).id;
+  }
+  return state;
+}
+
+test('TASK-03: children nest three levels deep and the selectors follow', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title));
+  assert.equal(l1.parentId, null);
+  assert.equal(l3.parentId, l2.id);
+  assert.deepEqual(childrenOf(state, l1.id).map((task) => task.title), ['L2']);
+  assert.deepEqual(ancestorsOf(state, l3.id).map((task) => task.title), ['L2', 'L1']);
+  assert.deepEqual(subtreeIds(state, l1.id), [l2.id, l3.id]);
+  assert.throws(() => addChildTask(state, 'ghost', { title: 'x' }, ctx(TT)), /no longer exists/);
+});
+
+test('TASK-03: moves are refused under itself, a descendant, past 5 levels, the 51st child and a closed parent', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title).id);
+  assert.throws(() => saveTask(state, l1, { parentId: l1 }, ctx(TT)), /under itself or its own child/);
+  assert.throws(() => saveTask(state, l1, { parentId: l3 }, ctx(TT)), /under itself or its own child/);
+  assert.throws(() => saveTask(state, l2, { parentId: l3 }, ctx(TT)), /under itself or its own child/);
+
+  // A depth-4 task and a loose 2-level subtree: 4 + 2 = 6 levels.
+  let deep = chain(4);
+  deep = captureTask(deep, { title: 'Top' }, ctx(TT));
+  const top = byTitle(deep, 'Top').id;
+  deep = addChildTask(deep, top, { title: 'Leaf' }, ctx(TT));
+  const l4 = byTitle(deep, 'L4').id;
+  assert.throws(() => saveTask(deep, top, { parentId: l4 }, ctx(TT)), /at most 5 levels/);
+  const five = chain(5);
+  assert.throws(() => addChildTask(five, byTitle(five, 'L5').id, { title: 'x' }, ctx(TT)), /at most 5 levels/);
+  const fits = saveTask(deep, byTitle(deep, 'Leaf').id, { parentId: l4 }, ctx(TT));
+  assert.equal(byTitle(fits, 'Leaf').parentId, l4);
+
+  let wide = captureTask(fresh(), { title: 'Parent' }, ctx(TT));
+  const parent = wide.tasks[0].id;
+  for (let index = 0; index < MAX_CHILDREN; index += 1) wide = addChildTask(wide, parent, { title: `c${index}` }, ctx(TT));
+  assert.throws(() => addChildTask(wide, parent, { title: 'one more' }, ctx(TT)), /at most 50 child tasks/);
+
+  let closed = captureTask(fresh(), { title: 'Done parent' }, ctx(TT));
+  closed = captureTask(closed, { title: 'Loose' }, ctx(TT));
+  closed = toggleTask(closed, closed.tasks[0].id, ctx(TT));
+  assert.throws(() => saveTask(closed, closed.tasks[1].id, { parentId: closed.tasks[0].id }, ctx(TT)), /Reopen the parent/);
+  assert.throws(() => addChildTask(closed, closed.tasks[0].id, { title: 'x' }, ctx(TT)), /Reopen the parent/);
+  const parked = saveTask(closed, closed.tasks[1].id, { status: 'completed', parentId: closed.tasks[0].id }, ctx(TT));
+  assert.equal(parked.tasks[1].parentId, closed.tasks[0].id);
+});
+
+test('TASK-04: a parent closes only after its children and reopens with them', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title).id);
+  assert.throws(() => toggleTask(state, l1, ctx(TT)), /Complete or cancel its child tasks first/);
+  assert.throws(() => saveTask(state, l2, { status: 'canceled' }, ctx(TT)), /Complete or cancel its child tasks first/);
+  let done = toggleTask(state, l3, ctx('2026-11-19T10:00:00Z'));
+  done = toggleTask(done, l2, ctx('2026-11-19T10:01:00Z'));
+  done = toggleTask(done, l1, ctx('2026-11-19T10:02:00Z'));
+  assert.equal(done.tasks.find((task) => task.id === l1).status, 'completed');
+
+  const reopened = toggleTask(done, l3, ctx('2026-11-19T11:00:00Z'));
+  for (const id of [l1, l2, l3]) assert.equal(reopened.tasks.find((task) => task.id === id).status, 'open');
+  for (const id of [l1, l2]) {
+    assert.equal(reopened.tasks.find((task) => task.id === id).events.at(-1).type, 'reopened');
+  }
+  assert.deepEqual(childProgress(reopened, l2), { done: 0, total: 1 });
+});
+
+test('TASK-04: a parent with children cannot be deleted', () => {
+  const state = chain(2);
+  assert.throws(() => deleteTask(state, byTitle(state, 'L1').id, ctx(TT)), /Delete or move its child tasks first/);
+  const lone = deleteTask(state, byTitle(state, 'L2').id, ctx(TT));
+  assert.equal(deleteTask(lone, byTitle(lone, 'L1').id, ctx(TT)).tasks.length, 0);
+});
+
+test('WB-02: during a hold on a parent its open children stay in place', () => {
+  const made = strictTask({ title: 'Held parent' });
+  let state = addChildTask(made.state, made.id, { title: 'Open child' }, ctx(T0));
+  state = addChildTask(state, made.id, { title: 'Other child' }, ctx(T0));
+  state = captureTask(state, { title: 'Elsewhere' }, ctx(T0));
+  const child = byTitle(state, 'Open child').id;
+  const other = byTitle(state, 'Other child').id;
+  const elsewhere = byTitle(state, 'Elsewhere').id;
+  state = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const now = ctx('2026-11-19T10:05:00Z');
+  assert.throws(() => deleteTask(state, child, now), /Open child tasks cannot be removed/);
+  assert.throws(() => saveTask(state, child, { status: 'canceled' }, now), /Open child tasks cannot be removed/);
+  assert.throws(() => saveTask(state, child, { parentId: null }, now), /Open child tasks cannot be removed/);
+  assert.throws(() => saveTask(state, child, { parentId: elsewhere }, now), /Open child tasks cannot be removed/);
+  assert.equal(saveTask(state, child, { parentId: other }, now).tasks.find((task) => task.id === child).parentId, other);
+  state = toggleTask(state, child, now);
+  state = toggleTask(state, other, now);
+  assert.equal(state.tasks.find((task) => task.id === child).status, 'completed');
+  const held = saveTask(state, made.id, { subtasks: tickedDone }, now);
+  assert.equal(saveTask(held, made.id, { status: 'completed' }, now).tasks[0].status, 'completed');
+});
+
+const syncPayload = (state, id, when) => exportSync(state, { id, name: id }, at(when));
+
+test('TASK-06: a missing or deleted parent reads as top level and nothing is written', () => {
+  const pc = chain(2);
+  const child = byTitle(pc, 'L2');
+  const phone = mergeSync(fresh(), syncPayload(pc, 'pc', '2026-11-19T10:00:00Z'), ctx('2026-11-19T10:01:00Z', 'phone')).state;
+  assert.equal(effectiveParents(phone).get(child.id), child.parentId);
+  const stale = JSON.parse(JSON.stringify(syncPayload(pc, 'pc', '2026-11-19T10:04:00Z')));
+  stale.data.tasks.find((task) => task.id === child.id).parentId = 'missing';
+  stale.data.tasks.find((task) => task.id === child.id).stamps.parentId = '2026-11-19T10:03:00.000Z|pc';
+  const result = mergeSync(phone, stale, ctx('2026-11-19T10:05:00Z', 'phone'));
+  const stored = result.state.tasks.find((task) => task.id === child.id);
+  assert.equal(stored.parentId, 'missing');
+  assert.equal(stored.stamps.parentId, '2026-11-19T10:03:00.000Z|pc');
+  assert.equal(effectiveParents(result.state).get(child.id), null);
+  assert.equal(result.summary.repaired, 1);
+  assert.equal(result.state.conflicts.length, 0);
+  assert.deepEqual(childrenOf(result.state, child.parentId), []);
+
+  const tombstoned = { ...phone, deleted: { ...phone.deleted, [child.parentId]: '2026-11-19T10:00:00.000Z' } };
+  assert.equal(effectiveParents(tombstoned).get(child.id), null);
+  assert.equal(effectiveParents(phone).get(child.id), child.parentId);
+});
+
+test('TASK-06: a cycle reads as broken at the task whose parent was set last', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title).id);
+  const stamp = (id, value, when) => ({ id, value, when });
+  const damaged = {
+    ...state,
+    tasks: state.tasks.map((task) => {
+      const edit = [stamp(l1, l3, 'z'), stamp(l2, l1, 'a'), stamp(l3, l2, 'm')].find((item) => item.id === task.id);
+      return { ...task, parentId: edit.value, stamps: { ...task.stamps, parentId: edit.when } };
+    })
+  };
+  const parents = effectiveParents(damaged);
+  assert.equal(parents.get(l1), null);
+  assert.equal(parents.get(l2), l1);
+  assert.equal(parents.get(l3), l2);
+  assert.deepEqual(ancestorsOf(damaged, l3).map((task) => task.title), ['L2', 'L1']);
+  // The tie goes to the lower id.
+  const tied = { ...damaged, tasks: damaged.tasks.map((task) => ({ ...task, stamps: { ...task.stamps, parentId: 'same' } })) };
+  const lowest = [l1, l2, l3].sort()[0];
+  assert.equal(effectiveParents(tied).get(lowest), null);
+});
+
+test('TASK-06: two devices merging a move cycle in opposite orders read the same tree with no conflicts', () => {
+  let pc = captureTask(fresh(), { title: 'A' }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  pc = captureTask(pc, { title: 'B' }, ctx('2026-11-19T08:00:01Z', 'pc'));
+  const [a, b] = pc.tasks.map((task) => task.id);
+  let phone = mergeSync(fresh(), syncPayload(pc, 'pc', '2026-11-19T08:01:00Z'), ctx('2026-11-19T08:02:00Z', 'phone')).state;
+  pc = saveTask(pc, a, { parentId: b }, ctx('2026-11-19T09:00:00Z', 'pc'));
+  phone = saveTask(phone, b, { parentId: a }, ctx('2026-11-19T09:30:00Z', 'phone'));
+  const onPc = mergeSync(pc, syncPayload(phone, 'phone', '2026-11-19T10:00:00Z'), ctx('2026-11-19T10:01:00Z', 'pc'));
+  const onPhone = mergeSync(phone, syncPayload(pc, 'pc', '2026-11-19T10:00:00Z'), ctx('2026-11-19T10:01:00Z', 'phone'));
+  for (const merged of [onPc, onPhone]) {
+    assert.equal(merged.state.conflicts.length, 0);
+    assert.equal(merged.summary.repaired, 1);
+    assert.deepEqual([...effectiveParents(merged.state)].sort(), [[a, b], [b, null]].sort());
+    assert.equal(merged.state.tasks.find((task) => task.id === b).parentId, a, 'the stored value is untouched');
+  }
+  // A clean merge repairs nothing.
+  assert.equal(mergeSync(fresh(), syncPayload(chain(3), 'x', '2026-11-19T10:00:00Z'), ctx('2026-11-19T10:01:00Z', 'pc')).summary.repaired, 0);
+});
+
+test('TASK-06: resolving a conflict toward a cycle still reads as a tree', () => {
+  let pc = fresh();
+  for (const title of ['X', 'Y', 'Z']) pc = captureTask(pc, { title }, ctx('2026-11-19T08:00:00Z', 'pc'));
+  let phone = mergeSync(fresh(), syncPayload(pc, 'pc', '2026-11-19T08:01:00Z'), ctx('2026-11-19T08:02:00Z', 'phone')).state;
+  pc = mergeSync(pc, syncPayload(phone, 'phone', '2026-11-19T08:03:00Z'), ctx('2026-11-19T08:04:00Z', 'pc')).state;
+  const [x, y, z] = ['X', 'Y', 'Z'].map((title) => byTitle(pc, title).id);
+  pc = saveTask(pc, x, { parentId: y }, ctx('2026-11-19T09:00:00Z', 'pc'));
+  phone = saveTask(phone, x, { parentId: z }, ctx('2026-11-19T09:05:00Z', 'phone'));
+  phone = saveTask(phone, y, { parentId: x }, ctx('2026-11-19T09:06:00Z', 'phone'));
+  pc = mergeSync(pc, syncPayload(phone, 'phone', '2026-11-19T10:00:00Z'), ctx('2026-11-19T10:01:00Z', 'pc')).state;
+  assert.equal(pc.conflicts.length, 1);
+  assert.equal(pc.conflicts[0].field, 'parentId');
+  const resolved = resolveConflict(pc, pc.conflicts[0].id, 'local', ctx('2026-11-19T10:02:00Z', 'pc'));
+  assert.equal(resolved.tasks.find((task) => task.id === x).parentId, y);
+  assert.equal(resolved.tasks.find((task) => task.id === y).parentId, x);
+  assert.equal(effectiveParents(resolved).get(x), null);
+  assert.equal(effectiveParents(resolved).get(y), x);
+  assert.deepEqual(ancestorsOf(resolved, y).map((task) => task.id), [x]);
+});
+
+test('TASK-06: a sync file with a bad parentId is refused', () => {
+  const payload = () => JSON.parse(JSON.stringify(syncPayload(chain(2), 'pc', '2026-11-19T10:00:00Z')));
+  for (const parentId of [5, {}, '', 'x'.repeat(65), true]) {
+    const bad = payload();
+    bad.data.tasks[0].parentId = parentId;
+    assert.throws(() => mergeSync(fresh(), bad, ctx('2026-11-19T10:01:00Z', 'phone')), /invalid task/);
+  }
+  const old = payload();
+  delete old.data.tasks[0].parentId;
+  assert.doesNotThrow(() => mergeSync(fresh(), old, ctx('2026-11-19T10:01:00Z', 'phone')));
+});
+
+test('TASK-04: a closed parent that sync left with an open child can still be edited', () => {
+  const state = chain(2);
+  const l1 = byTitle(state, 'L1');
+  const damaged = { ...state, tasks: state.tasks.map((task) => (task.id === l1.id ? { ...task, status: 'completed', completedAt: TT } : task)) };
+  const renamed = saveTask(damaged, l1.id, { title: 'Renamed' }, ctx(TT));
+  assert.equal(byTitle(renamed, 'Renamed').status, 'completed');
+  assert.throws(() => saveTask(damaged, l1.id, { status: 'canceled' }, ctx(TT)), /Complete or cancel its child tasks first/);
+  // The open grandchild must come with a reopened chain, top down.
+  const deep = chain(3);
+  const closed = { ...deep, tasks: deep.tasks.map((task) => (task.title === 'L3' ? task : { ...task, status: 'completed', completedAt: TT })) };
+  const reopened = saveTask(closed, byTitle(closed, 'L3').id, { title: 'L3 again' }, ctx(TT));
+  assert.equal(byTitle(reopened, 'L1').status, 'completed', 'editing does not reopen');
+});
+
+test('WB-02: a hold on a parent also guards a closed child that has an open grandchild', () => {
+  const made = strictTask({ title: 'Held parent' });
+  let state = addChildTask(made.state, made.id, { title: 'Mid' }, ctx(T0));
+  state = addChildTask(state, byTitle(state, 'Mid').id, { title: 'Deep' }, ctx(T0));
+  const mid = byTitle(state, 'Mid').id;
+  state = { ...state, tasks: state.tasks.map((task) => (task.id === mid ? { ...task, status: 'completed', completedAt: T0 } : task)) };
+  state = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const now = ctx('2026-11-19T10:05:00Z');
+  const ticked = saveTask(state, made.id, { subtasks: tickedDone }, now);
+  assert.throws(() => saveTask(ticked, made.id, { status: 'completed' }, now), /Complete or cancel its child tasks first/);
+  assert.throws(() => saveTask(state, mid, { parentId: null }, now), /Open child tasks cannot be removed/);
+});
+
+test('TASK-05: children stay out of the inbox and the automatic next task skips a parent with open children', () => {
+  let state = captureTask(fresh(), { title: 'Parent', plannedDate: '2026-11-19', pinned: true }, ctx(TT));
+  const parent = state.tasks[0].id;
+  state = addChildTask(state, parent, { title: 'Child', plannedDate: '2026-11-19' }, ctx(TT));
+  state = captureTask(state, { title: 'Loose' }, ctx(TT));
+  assert.deepEqual(inboxTasks(state).map((task) => task.title), ['Loose']);
+  assert.equal(todayView(state, at(TT)).next.title, 'Child');
+  const chosen = setNextAction(state, parent, ctx(TT));
+  assert.equal(todayView(chosen, at(TT)).next.title, 'Parent');
+});
+
+test('TASK-05: child progress, focus rolled up over the subtree and a deadline later than the parent', () => {
+  let state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title).id);
+  assert.deepEqual(childProgress(state, l1), { done: 0, total: 1 });
+  const seg = (taskId, start, end) => ({ id: `${taskId}${start}`, sessionId: 's', taskId, start, end, deviceId: 'pc' });
+  state = { ...state, focusSegments: [
+    seg(l1, '2026-11-19T10:00:00.000Z', '2026-11-19T10:10:00.000Z'),
+    seg(l2, '2026-11-19T11:00:00.000Z', '2026-11-19T11:20:00.000Z')
+  ] };
+  state = startFocus(state, at('2026-11-19T12:00:00Z'), { taskId: l3 });
+  const now = at('2026-11-19T12:05:00Z');
+  assert.equal(taskFocusMinutes(state, l1, now), 10);
+  assert.equal(subtreeFocusMinutes(state, l1, now), 35);
+  assert.equal(subtreeFocusMinutes(state, l2, now), 25);
+  assert.equal(focusTimeReview(state, '2026-11-19', '2026-11-19', now).byTask.find((item) => item.taskId === l1).minutes, 10);
+
+  state = saveTask(state, l1, { deadline: '2026-11-25T10:00:00.000Z' }, ctx(TT));
+  state = saveTask(state, l2, { deadline: '2026-11-26T10:00:00.000Z' }, ctx(TT));
+  state = toggleTask(state, l3, ctx(TT));
+  assert.deepEqual(childProgress(state, l2), { done: 1, total: 1 });
+  const task = (id) => state.tasks.find((item) => item.id === id);
+  assert.equal(deadlineAfterParent(state, task(l2)), true);
+  assert.equal(deadlineAfterParent(state, task(l3)), false);
+  assert.equal(deadlineAfterParent(state, task(l1)), false);
+});
+
+test('TASK-03: parentChoices lists only the parents a move would allow', () => {
+  let state = chain(3);
+  state = captureTask(state, { title: 'Other' }, ctx(TT));
+  state = captureTask(state, { title: 'Closed' }, ctx(TT));
+  state = toggleTask(state, byTitle(state, 'Closed').id, ctx(TT));
+  const titles = (title) => parentChoices(state, byTitle(state, title).id).map((task) => task.title).sort();
+  assert.deepEqual(titles('L1'), ['Other']);
+  assert.deepEqual(titles('L3'), ['L1', 'L2', 'Other']);
+  assert.deepEqual(titles('Other'), ['L1', 'L2', 'L3']);
+  assert.deepEqual(parentChoices(state, 'ghost'), []);
+});
+
+test('TASK-05: the next action descends to a leaf of a pinned parent and an explicit choice is kept', () => {
+  let state = captureTask(fresh(), { title: 'Parent', plannedDate: '2026-11-19', pinned: true }, ctx(TT));
+  const parent = state.tasks[0].id;
+  state = addChildTask(state, parent, { title: 'First child' }, ctx(TT));
+  state = addChildTask(state, byTitle(state, 'First child').id, { title: 'Leaf' }, ctx(TT));
+  state = addChildTask(state, parent, { title: 'Second child' }, ctx(TT));
+  assert.equal(todayView(state, at(TT)).next.title, 'Leaf');
+  state = toggleTask(state, byTitle(state, 'Leaf').id, ctx(TT));
+  assert.equal(todayView(state, at(TT)).next.title, 'First child');
+  assert.equal(todayView(setNextAction(state, parent, ctx(TT)), at(TT)).next.title, 'Parent');
+});
+
+test('WB-01: an active child task makes a block eligible for strict', () => {
+  const made = captureTask(fresh(), { title: 'Plain' }, ctx(T0));
+  const id = made.tasks[0].id;
+  assert.throws(() => saveTask(made, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add subtasks or completion criteria/);
+  const withChild = addChildTask(made, id, { title: 'Step' }, ctx(T0));
+  assert.equal(saveTask(withChild, id, { workBlocks: [BLOCK] }, ctx(T0)).tasks[0].workBlocks[0].strict, true);
+  const done = toggleTask(withChild, byTitle(withChild, 'Step').id, ctx(T0));
+  assert.throws(() => saveTask(done, id, { workBlocks: [BLOCK] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+// A parent made strict only because it has one open child.
+function strictOnChild(blockOverride = {}) {
+  let state = captureTask(fresh(), { title: 'P' }, ctx(T0));
+  const parent = state.tasks[0].id;
+  state = addChildTask(state, parent, { title: 'K' }, ctx(T0));
+  state = saveTask(state, parent, { workBlocks: [{ ...BLOCK, ...blockOverride }] }, ctx(T0));
+  return { state, parent, kid: byTitle(state, 'K').id };
+}
+
+test('WB-01: a strict parent whose last child was completed can still be edited and completed', () => {
+  const { state, parent, kid } = strictOnChild();
+  const done = toggleTask(state, kid, ctx(T0));
+  const renamed = saveTask(done, parent, { title: 'P renamed' }, ctx(T0));
+  assert.equal(byTitle(renamed, 'P renamed').status, 'open');
+  assert.equal(toggleTask(done, parent, ctx(T0)).tasks[0].status, 'completed');
+  // Making a block strict on an ineligible task still throws.
+  const second = { id: 'blk2', start: '2026-11-19T12:00:00.000Z', end: '2026-11-19T12:30:00.000Z', strict: true };
+  assert.throws(() => saveTask(done, parent, { workBlocks: [BLOCK, second] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+test('WB-01: the same holds during a live hold and the hold logs on_time', () => {
+  const { state, parent, kid } = strictOnChild();
+  let held = tickStrict(state, ctx('2026-11-19T10:00:00Z'));
+  const now = ctx('2026-11-19T10:05:00Z');
+  held = toggleTask(held, kid, now);
+  held = toggleTask(held, parent, ctx('2026-11-19T10:06:00Z'));
+  const ticked = tickStrict(held, ctx('2026-11-19T10:07:00Z'));
+  assert.deepEqual(ticked.strictLog.map((entry) => entry.outcome), ['on_time']);
+});
+
+test('WB-01: before the block starts, taking the only child away from a strict parent is refused', () => {
+  const { state, parent, kid } = strictOnChild();
+  const other = captureTask(state, { title: 'Elsewhere' }, ctx(T0));
+  const message = /strict block on its parent task needs it/;
+  assert.throws(() => saveTask(state, kid, { parentId: null }, ctx(T0)), message);
+  assert.throws(() => saveTask(other, kid, { parentId: byTitle(other, 'Elsewhere').id }, ctx(T0)), message);
+  assert.throws(() => saveTask(state, kid, { status: 'canceled' }, ctx(T0)), message);
+  assert.throws(() => deleteTask(state, kid, ctx(T0)), message);
+  assert.equal(toggleTask(state, kid, ctx(T0)).tasks.find((task) => task.id === kid).status, 'completed');
+  // A second open child keeps the parent eligible.
+  const two = addChildTask(state, parent, { title: 'K2' }, ctx(T0));
+  assert.equal(saveTask(two, kid, { parentId: null }, ctx(T0)).tasks.find((task) => task.id === kid).parentId, null);
+  // Subtasks also keep it eligible.
+  const withSubtask = saveTask(state, parent, { subtasks: [{ title: 'Step' }] }, ctx(T0));
+  assert.equal(deleteTask(withSubtask, kid, ctx(T0)).tasks.length, 1);
+});
+
+test('WB-01: removing the last subtask of a strict task with no children still throws', () => {
+  const { state, id } = strictTask();
+  assert.throws(() => saveTask(state, id, { subtasks: [] }, ctx(T0)), /Add subtasks or completion criteria/);
+});
+
+test('TASK-03: an active child of a closed parent is not nested under it', () => {
+  const state = chain(3);
+  const [l1, l2, l3] = ['L1', 'L2', 'L3'].map((title) => byTitle(state, title));
+  const closedMid = { ...state, tasks: state.tasks.map((task) => (task.id === l2.id ? { ...task, status: 'completed', completedAt: TT } : task)) };
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L1')).map((task) => task.title), ['L2']);
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L2')), []);
+  assert.deepEqual(nestedChildren(closedMid, byTitle(closedMid, 'L3')), []);
+  assert.ok(l1 && l3);
+});
