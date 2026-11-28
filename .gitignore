@@ -5,3 +5,5 @@ release/
 .DS_Store
 .agent-runs/
 .claude/settings.local.json
+*.pem
+*.crx
